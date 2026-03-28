@@ -1,0 +1,142 @@
+{{ 'store-reply-widget.css' | asset_url | stylesheet_tag }}
+<script src="{{ 'store-reply-widget.js' | asset_url }}" defer></script>
+
+{% assign widget_id = 'store-reply-widget-' | append: block.id %}
+
+<div
+  id="{{ widget_id }}"
+  class="store-reply-widget-root"
+  data-widget-id="{{ widget_id }}"
+  data-shop-domain="{{ shop.permanent_domain }}"
+  data-backend-url="{{ block.settings.backend_base_url | escape }}"
+  data-launcher-label="{{ block.settings.launcher_label | escape }}"
+  data-subtitle="{{ block.settings.widget_subtitle | escape }}"
+  data-position="{{ block.settings.position }}"
+  data-accent-color="{{ block.settings.accent_color }}"
+  data-panel-width="{{ block.settings.panel_width }}"
+  data-corner-style="{{ block.settings.corner_style }}"
+  data-mobile-visibility="{{ block.settings.mobile_visibility }}"
+>
+  <button type="button" class="store-reply-launcher">
+    <span class="store-reply-launcher-dot"></span>
+    <span>{{ block.settings.launcher_label }}</span>
+  </button>
+
+  <div class="store-reply-panel" hidden>
+    <div class="store-reply-header">
+      <div>
+        <div class="store-reply-title">{{ block.settings.launcher_label }}</div>
+        <div class="store-reply-subtitle">{{ block.settings.widget_subtitle }}</div>
+      </div>
+      <button type="button" class="store-reply-close" aria-label="Close support chat">x</button>
+    </div>
+
+    <div class="store-reply-thread">
+      <div class="store-reply-bubble store-reply-bubble-agent">
+        Connecting to StoreReply...
+      </div>
+    </div>
+
+    <form class="store-reply-input-row">
+      <input
+        type="text"
+        class="store-reply-input"
+        placeholder="Ask a question..."
+      >
+      <button type="submit" class="store-reply-send">Send</button>
+    </form>
+    <div class="store-reply-status" hidden></div>
+  </div>
+</div>
+
+{% schema %}
+{
+  "name": "StoreReply Chat",
+  "target": "body",
+  "stylesheet": "store-reply-widget.css",
+  "javascript": "store-reply-widget.js",
+  "settings": [
+    {
+      "type": "header",
+      "content": "Connection"
+    },
+    {
+      "type": "text",
+      "id": "backend_base_url",
+      "label": "Backend base URL",
+      "default": "http://localhost:3001"
+    },
+    {
+      "type": "header",
+      "content": "Storefront layout"
+    },
+    {
+      "type": "text",
+      "id": "launcher_label",
+      "label": "Launcher label",
+      "default": "Support"
+    },
+    {
+      "type": "text",
+      "id": "widget_subtitle",
+      "label": "Widget subtitle",
+      "default": "Embedded storefront support"
+    },
+    {
+      "type": "color",
+      "id": "accent_color",
+      "label": "Accent color",
+      "default": "#d8633d"
+    },
+    {
+      "type": "select",
+      "id": "position",
+      "label": "Widget position",
+      "default": "right",
+      "options": [
+        { "value": "right", "label": "Bottom right" },
+        { "value": "left", "label": "Bottom left" }
+      ]
+    },
+    {
+      "type": "select",
+      "id": "panel_width",
+      "label": "Panel width",
+      "default": "medium",
+      "options": [
+        { "value": "small", "label": "Compact" },
+        { "value": "medium", "label": "Standard" },
+        { "value": "large", "label": "Wide" }
+      ]
+    },
+    {
+      "type": "select",
+      "id": "corner_style",
+      "label": "Corner style",
+      "default": "rounded",
+      "options": [
+        { "value": "rounded", "label": "Rounded" },
+        { "value": "square", "label": "Square" }
+      ]
+    },
+    {
+      "type": "select",
+      "id": "mobile_visibility",
+      "label": "Mobile visibility",
+      "default": "show",
+      "options": [
+        { "value": "show", "label": "Show on mobile" },
+        { "value": "hide", "label": "Hide on mobile" }
+      ]
+    },
+    {
+      "type": "header",
+      "content": "Settings ownership"
+    },
+    {
+      "type": "paragraph",
+      "content": "Edit widget behavior, greeting, assistant name, and knowledge in the app dashboard. Edit storefront layout and appearance here in Shopify."
+    }
+  ]
+}
+{% endschema %}
