@@ -1,0 +1,12 @@
+{
+  "name": "support-agent-monorepo",
+  "private": true,
+  "version": "1.0.0",
+  "engines": {
+    "node": "20.x"
+  },
+  "scripts": {
+    "build": "npm --prefix frontend install && npm --prefix backend install && npm --prefix backend run build:frontend",
+    "start": "npm --prefix backend start"
+  }
+}
