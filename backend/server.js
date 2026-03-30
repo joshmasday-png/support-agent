@@ -6,6 +6,7 @@ const path = require('path');
 const express = require('express');
 const cors = require('cors');
 const OpenAI = require('openai');
+const { createPersistence } = require('./db');
 
 const app = express();
 const port = Number(process.env.PORT) || 3001;
@@ -79,60 +80,8 @@ function getDefaultMerchantSettings() {
 }
 
 const pendingShopifyStates = new Map();
-const dataDirectory = path.join(__dirname, 'data');
-const appStatePath = path.join(dataDirectory, 'app-state.json');
 const frontendDistDirectory = path.resolve(__dirname, '../frontend/dist');
-
-function ensureDataDirectory() {
-  if (!fs.existsSync(dataDirectory)) {
-    fs.mkdirSync(dataDirectory, { recursive: true });
-  }
-}
-
-function loadPersistedState() {
-  ensureDataDirectory();
-
-  if (!fs.existsSync(appStatePath)) {
-    return {
-      shopifySessions: {},
-      merchantSettings: {},
-      conversationHistory: {},
-      usageStats: {},
-    };
-  }
-
-  try {
-    const raw = fs.readFileSync(appStatePath, 'utf8');
-    const parsed = JSON.parse(raw);
-
-    return {
-      shopifySessions:
-        parsed && typeof parsed.shopifySessions === 'object' && parsed.shopifySessions
-          ? parsed.shopifySessions
-          : {},
-      merchantSettings:
-        parsed && typeof parsed.merchantSettings === 'object' && parsed.merchantSettings
-          ? parsed.merchantSettings
-          : {},
-      conversationHistory:
-        parsed && typeof parsed.conversationHistory === 'object' && parsed.conversationHistory
-          ? parsed.conversationHistory
-          : {},
-      usageStats:
-        parsed && typeof parsed.usageStats === 'object' && parsed.usageStats
-          ? parsed.usageStats
-          : {},
-    };
-  } catch (error) {
-    console.error('Failed to load persisted app state:', error);
-    return {
-      shopifySessions: {},
-      merchantSettings: {},
-      conversationHistory: {},
-      usageStats: {},
-    };
-  }
-}
+const persistence = createPersistence();
 
 function savePersistedState(
   shopifySessionsMap,
@@ -140,20 +89,15 @@ function savePersistedState(
   conversationHistoryMap,
   usageStatsMap
 ) {
-  ensureDataDirectory();
-
-  const payload = {
+  persistence.saveState({
     shopifySessions: Object.fromEntries(shopifySessionsMap.entries()),
     merchantSettings: Object.fromEntries(merchantSettingsMap.entries()),
     conversationHistory: Object.fromEntries(conversationHistoryMap.entries()),
     usageStats: Object.fromEntries(usageStatsMap.entries()),
-    updatedAt: new Date().toISOString(),
-  };
-
-  fs.writeFileSync(appStatePath, JSON.stringify(payload, null, 2));
+  });
 }
 
-const persistedState = loadPersistedState();
+const persistedState = persistence.loadState();
 const shopifySessions = new Map(Object.entries(persistedState.shopifySessions));
 const merchantSettings = new Map(Object.entries(persistedState.merchantSettings));
 const conversationHistory = new Map(Object.entries(persistedState.conversationHistory));
