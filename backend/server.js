@@ -641,6 +641,102 @@ function buildHostedMerchantAppUrl(shop, connected) {
   return appUrl.toString();
 }
 
+function getSessionCookieSecret() {
+  return shopifyConfig.apiSecret || 'storereply-dev-session-secret';
+}
+
+function createMerchantSessionCookieValue(shop) {
+  const normalizedShop = isValidShopDomain(shop) ? shop.trim() : '';
+
+  if (!normalizedShop) {
+    return '';
+  }
+
+  const signature = crypto
+    .createHmac('sha256', getSessionCookieSecret())
+    .update(normalizedShop)
+    .digest('hex');
+
+  return `${normalizedShop}.${signature}`;
+}
+
+function parseCookies(cookieHeader) {
+  if (typeof cookieHeader !== 'string' || !cookieHeader.trim()) {
+    return {};
+  }
+
+  return cookieHeader.split(';').reduce((cookies, part) => {
+    const [rawName, ...rawValueParts] = part.split('=');
+    const name = rawName ? rawName.trim() : '';
+    const value = rawValueParts.length > 0 ? rawValueParts.join('=').trim() : '';
+
+    if (name) {
+      cookies[name] = decodeURIComponent(value);
+    }
+
+    return cookies;
+  }, {});
+}
+
+function getMerchantSessionShop(req) {
+  const cookies = parseCookies(req.headers.cookie);
+  const cookieValue = cookies.storereply_shop;
+
+  if (typeof cookieValue !== 'string' || !cookieValue.trim()) {
+    return '';
+  }
+
+  const lastDot = cookieValue.lastIndexOf('.');
+
+  if (lastDot <= 0) {
+    return '';
+  }
+
+  const shop = cookieValue.slice(0, lastDot);
+  const signature = cookieValue.slice(lastDot + 1);
+
+  if (!isValidShopDomain(shop) || !signature) {
+    return '';
+  }
+
+  const expectedSignature = crypto
+    .createHmac('sha256', getSessionCookieSecret())
+    .update(shop)
+    .digest('hex');
+
+  const provided = Buffer.from(signature, 'utf8');
+  const expected = Buffer.from(expectedSignature, 'utf8');
+
+  if (provided.length !== expected.length || !crypto.timingSafeEqual(provided, expected)) {
+    return '';
+  }
+
+  return shop;
+}
+
+function setMerchantSessionCookie(res, shop) {
+  const cookieValue = createMerchantSessionCookieValue(shop);
+
+  if (!cookieValue) {
+    return;
+  }
+
+  const isSecure = shopifyConfig.appUrl.startsWith('https://');
+  const parts = [
+    `storereply_shop=${encodeURIComponent(cookieValue)}`,
+    'Path=/',
+    'HttpOnly',
+    'SameSite=Lax',
+    'Max-Age=2592000',
+  ];
+
+  if (isSecure) {
+    parts.push('Secure');
+  }
+
+  res.setHeader('Set-Cookie', parts.join('; '));
+}
+
 function buildBillingReturnUrl(shop) {
   const appUrl = new URL(shopifyConfig.appUrl.replace(/\/$/, ''));
 
@@ -1456,8 +1552,27 @@ function renderMerchantAppWorkspace(initialShop) {
         renderHistory(conversations);
       }
 
+      async function resolveSessionShop() {
+        const response = await fetch('/api/session');
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.error || 'Could not load the current merchant session.');
+        }
+
+        return data.shop || '';
+      }
+
       async function loadStatus(options = {}) {
-        const shop = shopDomainInput.value.trim();
+        let shop = shopDomainInput.value.trim();
+
+        if (!shop) {
+          shop = await resolveSessionShop();
+          if (shop) {
+            shopDomainInput.value = shop;
+          }
+        }
+
         if (!shop) return;
 
         const response = await fetch('/api/dashboard-bootstrap?shop=' + encodeURIComponent(shop));
@@ -2048,7 +2163,8 @@ if (fs.existsSync(frontendDistDirectory)) {
 }
 
 app.get('/', (req, res) => {
-  const shop = typeof req.query.shop === 'string' ? req.query.shop.trim() : '';
+  const queryShop = typeof req.query.shop === 'string' ? req.query.shop.trim() : '';
+  const shop = isValidShopDomain(queryShop) ? queryShop : getMerchantSessionShop(req);
   return res.send(renderMerchantAppWorkspace(shop));
 });
 
@@ -2078,12 +2194,23 @@ app.get('/api/shopify/config', (req, res) => {
 });
 
 app.get('/api/shopify/status', (req, res) => {
-  const shop = typeof req.query.shop === 'string' ? req.query.shop.trim() : '';
+  const queryShop = typeof req.query.shop === 'string' ? req.query.shop.trim() : '';
+  const shop = isValidShopDomain(queryShop) ? queryShop : getMerchantSessionShop(req);
   res.json(getShopifyStatus(shop));
 });
 
+app.get('/api/session', (req, res) => {
+  const shop = getMerchantSessionShop(req);
+
+  res.json({
+    shop,
+    connected: Boolean(shop && shopifySessions.get(shop)?.accessToken),
+  });
+});
+
 app.get('/api/merchant-settings', (req, res) => {
-  const shop = typeof req.query.shop === 'string' ? req.query.shop.trim() : '';
+  const queryShop = typeof req.query.shop === 'string' ? req.query.shop.trim() : '';
+  const shop = isValidShopDomain(queryShop) ? queryShop : getMerchantSessionShop(req);
   const result = getMerchantSettings(shop);
 
   res.json({
@@ -2105,7 +2232,8 @@ app.get('/api/widget-config', (req, res) => {
 });
 
 app.get('/api/dashboard-bootstrap', (req, res) => {
-  const shop = typeof req.query.shop === 'string' ? req.query.shop.trim() : '';
+  const queryShop = typeof req.query.shop === 'string' ? req.query.shop.trim() : '';
+  const shop = isValidShopDomain(queryShop) ? queryShop : getMerchantSessionShop(req);
   const usageResult = getUsageStats(shop);
   const conversationResult = getConversationHistory(shop);
   const settingsResult = getMerchantSettings(shop);
@@ -2136,7 +2264,8 @@ app.get('/api/dashboard-bootstrap', (req, res) => {
 });
 
 app.get('/api/conversations', (req, res) => {
-  const shop = typeof req.query.shop === 'string' ? req.query.shop.trim() : '';
+  const queryShop = typeof req.query.shop === 'string' ? req.query.shop.trim() : '';
+  const shop = isValidShopDomain(queryShop) ? queryShop : getMerchantSessionShop(req);
   const result = getConversationHistory(shop);
 
   res.json({
@@ -2146,7 +2275,8 @@ app.get('/api/conversations', (req, res) => {
 });
 
 app.get('/api/usage-stats', (req, res) => {
-  const shop = typeof req.query.shop === 'string' ? req.query.shop.trim() : '';
+  const queryShop = typeof req.query.shop === 'string' ? req.query.shop.trim() : '';
+  const shop = isValidShopDomain(queryShop) ? queryShop : getMerchantSessionShop(req);
   const result = getUsageStats(shop);
   const today = new Date().toISOString().slice(0, 10);
 
@@ -2161,7 +2291,8 @@ app.get('/api/usage-stats', (req, res) => {
 });
 
 app.get('/api/billing/status', async (req, res) => {
-  const shop = typeof req.query.shop === 'string' ? req.query.shop.trim() : '';
+  const queryShop = typeof req.query.shop === 'string' ? req.query.shop.trim() : '';
+  const shop = isValidShopDomain(queryShop) ? queryShop : getMerchantSessionShop(req);
 
   try {
     const billing = await getBillingStatus(shop);
@@ -2281,6 +2412,7 @@ app.get('/auth/shopify/callback', async (req, res) => {
       knowledgeSources: [],
     });
     savePersistedState(shopifySessions, merchantSettings, conversationHistory, usageStats);
+    setMerchantSessionCookie(res, shop);
 
     return res.redirect(buildHostedMerchantAppUrl(shop, true));
   } catch (error) {

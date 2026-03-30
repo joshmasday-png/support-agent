@@ -229,12 +229,14 @@ function App() {
     async function load() {
       setBootStatus('loading');
       try {
-        const [templateResponse, shopifyConfigResponse] = await Promise.all([
+        const [templateResponse, shopifyConfigResponse, sessionResponse] = await Promise.all([
           fetch('/api/merchant-knowledge-template'),
           fetch('/api/shopify/config'),
+          fetch('/api/session'),
         ]);
         const templateData = await templateResponse.json();
         const shopifyConfigData = await shopifyConfigResponse.json();
+        const sessionData = await sessionResponse.json();
         if (!templateResponse.ok) {
           throw new Error(templateData.error || 'Could not load merchant dashboard templates.');
         }
@@ -243,7 +245,11 @@ function App() {
         setFaqTemplate(sourceTemplates.find((source) => source.type === 'faq_file')?.content || '');
         setShopifyReady(Boolean(shopifyConfigData.ready));
         setShopifyMissing(Array.isArray(shopifyConfigData.missing) ? shopifyConfigData.missing : []);
-        loadDashboardData('');
+        const sessionShop = typeof sessionData.shop === 'string' ? sessionData.shop : '';
+        if (sessionShop) {
+          setShopDomain(sessionShop);
+        }
+        loadDashboardData(sessionShop);
         setBootStatus('ready');
         setInfoMessage('Connect a store, sync knowledge, test replies, and preview the customer widget.');
       } catch (loadError) {
