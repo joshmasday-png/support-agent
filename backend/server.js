@@ -83,6 +83,22 @@ const pendingShopifyStates = new Map();
 const frontendDistDirectory = path.resolve(__dirname, '../frontend/dist');
 const persistence = createPersistence();
 
+function hydrateMapFromObject(map, objectValue) {
+  map.clear();
+
+  Object.entries(objectValue && typeof objectValue === 'object' ? objectValue : {}).forEach(
+    ([key, value]) => {
+      map.set(key, value);
+    }
+  );
+}
+
+const shopifySessions = new Map();
+const merchantSettings = new Map();
+const conversationHistory = new Map();
+const usageStats = new Map();
+const answerCache = new Map();
+
 function savePersistedState(
   shopifySessionsMap,
   merchantSettingsMap,
@@ -94,15 +110,10 @@ function savePersistedState(
     merchantSettings: Object.fromEntries(merchantSettingsMap.entries()),
     conversationHistory: Object.fromEntries(conversationHistoryMap.entries()),
     usageStats: Object.fromEntries(usageStatsMap.entries()),
+  }).catch((error) => {
+    console.error('Failed to persist app state:', error);
   });
 }
-
-const persistedState = persistence.loadState();
-const shopifySessions = new Map(Object.entries(persistedState.shopifySessions));
-const merchantSettings = new Map(Object.entries(persistedState.merchantSettings));
-const conversationHistory = new Map(Object.entries(persistedState.conversationHistory));
-const usageStats = new Map(Object.entries(persistedState.usageStats));
-const answerCache = new Map();
 
 function getConversationHistoryKey(shop) {
   return isValidShopDomain(shop) ? shop : 'demo-store';
@@ -111,10 +122,15 @@ function getConversationHistoryKey(shop) {
 function getConversationHistory(shop) {
   const key = getConversationHistoryKey(shop);
   const saved = conversationHistory.get(key);
+  const normalized = (Array.isArray(saved) ? saved : []).map((entry) => ({
+    ...entry,
+    reviewStatus: entry?.reviewStatus || 'unreviewed',
+    merchantNote: entry?.merchantNote || '',
+  }));
 
   return {
     key,
-    conversations: Array.isArray(saved) ? saved : [],
+    conversations: normalized,
   };
 }
 
@@ -144,6 +160,8 @@ function recordConversation({
             score: typeof grounding.score === 'number' ? grounding.score : 0,
           }
         : { label: 'Unknown', score: 0 },
+    reviewStatus: 'unreviewed',
+    merchantNote: '',
     createdAt: new Date().toISOString(),
   };
 
@@ -151,6 +169,37 @@ function recordConversation({
   savePersistedState(shopifySessions, merchantSettings, conversationHistory, usageStats);
 
   return nextEntry;
+}
+
+function updateConversationReview({ shop, conversationId, reviewStatus, merchantNote }) {
+  const key = getConversationHistoryKey(shop);
+  const existing = getConversationHistory(key).conversations;
+  let updatedEntry = null;
+
+  const nextConversations = existing.map((entry) => {
+    if (entry.id !== conversationId) {
+      return entry;
+    }
+
+    updatedEntry = {
+      ...entry,
+      reviewStatus:
+        reviewStatus === 'trusted' || reviewStatus === 'needs_review' || reviewStatus === 'unreviewed'
+          ? reviewStatus
+          : entry.reviewStatus || 'unreviewed',
+      merchantNote: typeof merchantNote === 'string' ? merchantNote.trim().slice(0, 500) : entry.merchantNote || '',
+    };
+
+    return updatedEntry;
+  });
+
+  if (!updatedEntry) {
+    return null;
+  }
+
+  conversationHistory.set(key, nextConversations);
+  savePersistedState(shopifySessions, merchantSettings, conversationHistory, usageStats);
+  return updatedEntry;
 }
 
 function getDefaultUsageStats() {
@@ -1087,9 +1136,16 @@ function renderMerchantAppWorkspace(initialShop) {
       .historyBody{padding:0 18px 18px}.historyList{display:grid;gap:12px}
       .logMeta{display:flex;flex-wrap:wrap;gap:8px;color:var(--muted);font-size:.86rem}.logTag{padding:6px 10px;border-radius:999px;background:#f4f8fb;border:1px solid #dce7f0}
       .logQuestion,.logReply{margin-top:10px;padding:12px;border-radius:14px;line-height:1.6;white-space:pre-wrap}.logQuestion{background:#fff3ed;color:#884026}.logReply{background:#edf6ff;color:#17324d}
+      .toolbar{display:grid;grid-template-columns:minmax(0,1fr) 220px;gap:10px;margin:12px 0 16px}
+      .reviewRow{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+      .reviewBtn{border:1px solid var(--line);background:#fff;padding:8px 12px;border-radius:999px;font-weight:700;color:var(--ink)}
+      .reviewBtn.active{background:#17324d;color:#fff;border-color:#17324d}
+      .reviewBtn.warn{border-color:#d8b25c}
+      .reviewBtn.warn.active{background:#8a5a08;border-color:#8a5a08}
+      .noteInput{margin-top:10px;min-height:78px}
       .hidden{display:none}
       @media (max-width:1080px){.overview{grid-template-columns:repeat(2,minmax(0,1fr))}.layout,.metrics,.split,.miniGrid{grid-template-columns:1fr}}
-      @media (max-width:720px){.overview{grid-template-columns:1fr}.cardHead,.label,.checkItem,.toggleRow{flex-direction:column;align-items:flex-start}.shell{width:min(100% - 24px,1220px)}}
+      @media (max-width:720px){.overview{grid-template-columns:1fr}.cardHead,.label,.checkItem,.toggleRow{flex-direction:column;align-items:flex-start}.shell{width:min(100% - 24px,1220px)}.toolbar{grid-template-columns:1fr}}
     </style>
   </head>
   <body>
@@ -1298,6 +1354,15 @@ function renderMerchantAppWorkspace(initialShop) {
               </summary>
               <div class="historyBody">
                 <div class="note" style="margin-bottom:12px">History stays tucked away here so it is available when needed without taking over the whole merchant screen.</div>
+                <div class="toolbar">
+                  <input id="historySearch" class="input" type="text" placeholder="Search customer questions or replies" />
+                  <select id="historyFilter" class="select">
+                    <option value="all">All reviews</option>
+                    <option value="unreviewed">Unreviewed</option>
+                    <option value="trusted">Trusted</option>
+                    <option value="needs_review">Needs review</option>
+                  </select>
+                </div>
                 <div id="historyList" class="historyList">
                   <div class="note">No tracked conversations yet.</div>
                 </div>
@@ -1347,8 +1412,11 @@ function renderMerchantAppWorkspace(initialShop) {
       const params = new URLSearchParams(window.location.search);
       const historyList = document.getElementById('historyList');
       const historySummaryMeta = document.getElementById('historySummaryMeta');
+      const historySearch = document.getElementById('historySearch');
+      const historyFilter = document.getElementById('historyFilter');
       const billingBtn = document.getElementById('billingBtn');
       const billingBadge = document.getElementById('billingBadge');
+      let latestConversations = [];
 
       function setMessage(message, type) {
         statusMessage.className = 'msg ' + (type === 'error' ? 'error' : 'info');
@@ -1371,19 +1439,42 @@ function renderMerchantAppWorkspace(initialShop) {
         element.className = 'state ' + (complete ? 'ok' : 'warn');
       }
 
+      function applyHistoryFilters(conversations) {
+        const search = (historySearch.value || '').trim().toLowerCase();
+        const filter = historyFilter.value || 'all';
+
+        return conversations.filter((entry) => {
+          const reviewStatus = entry.reviewStatus || 'unreviewed';
+          const matchesFilter = filter === 'all' ? true : reviewStatus === filter;
+          const haystack = ((entry.question || '') + ' ' + (entry.reply || '')).toLowerCase();
+          const matchesSearch = !search || haystack.includes(search);
+          return matchesFilter && matchesSearch;
+        });
+      }
+
       function renderHistory(conversations) {
-        if (!Array.isArray(conversations) || !conversations.length) {
+        latestConversations = Array.isArray(conversations) ? conversations : [];
+        const visibleConversations = applyHistoryFilters(latestConversations);
+
+        if (!latestConversations.length) {
           historySummaryMeta.textContent = 'No conversations yet';
           historyList.innerHTML = '<div class="note">No tracked conversations yet.</div>';
           return;
         }
 
-        historySummaryMeta.textContent = conversations.length + ' recent conversation' + (conversations.length === 1 ? '' : 's');
-        historyList.innerHTML = conversations.map((entry) => {
+        historySummaryMeta.textContent = visibleConversations.length + ' shown of ' + latestConversations.length + ' conversation' + (latestConversations.length === 1 ? '' : 's');
+
+        if (!visibleConversations.length) {
+          historyList.innerHTML = '<div class="note">No conversations match the current filters.</div>';
+          return;
+        }
+
+        historyList.innerHTML = visibleConversations.map((entry) => {
           const channel = entry.channel === 'storefront_widget' ? 'Storefront widget' : 'Merchant test';
           const createdAt = entry.createdAt ? new Date(entry.createdAt).toLocaleString() : 'Unknown time';
           const sourceCount = typeof entry.knowledgeSourceCount === 'number' ? entry.knowledgeSourceCount : 0;
           const groundingLabel = entry.grounding && entry.grounding.label ? entry.grounding.label : 'Unknown grounding';
+          const reviewStatus = entry.reviewStatus || 'unreviewed';
           const usedSources = Array.isArray(entry.usedSources) && entry.usedSources.length
             ? entry.usedSources.map((source) => {
                 const label = source && source.label ? source.label : 'Source';
@@ -1402,7 +1493,13 @@ function renderMerchantAppWorkspace(initialShop) {
             '<div class="logReply">' + escapeBrowserHtml(entry.reply || 'No reply stored.') + '</div>' +
             '<div class="logMeta" style="margin-top:10px">' +
               '<div class="logTag">' + escapeBrowserHtml(groundingLabel) + '</div>' +
+              '<div class="logTag">' + escapeBrowserHtml(reviewStatus.replaceAll('_', ' ')) + '</div>' +
               usedSources +
+            '</div>' +
+            '<div class="reviewRow">' +
+              '<button class="reviewBtn ' + (reviewStatus === 'trusted' ? 'active' : '') + '" data-action="trusted" data-id="' + escapeBrowserHtml(entry.id) + '">Mark trusted</button>' +
+              '<button class="reviewBtn warn ' + (reviewStatus === 'needs_review' ? 'active' : '') + '" data-action="needs_review" data-id="' + escapeBrowserHtml(entry.id) + '">Needs review</button>' +
+              '<button class="reviewBtn ' + (reviewStatus === 'unreviewed' ? 'active' : '') + '" data-action="unreviewed" data-id="' + escapeBrowserHtml(entry.id) + '">Clear review</button>' +
             '</div>' +
           '</div>';
         }).join('');
@@ -1494,6 +1591,33 @@ function renderMerchantAppWorkspace(initialShop) {
         document.getElementById('nextAction').textContent = nextAction;
 
         renderHistory(conversations);
+      }
+
+      async function handleConversationReview(conversationId, reviewStatus) {
+        const shop = shopDomainInput.value.trim();
+        if (!shop) {
+          setMessage('Enter a Shopify store domain before reviewing conversations.', 'error');
+          return;
+        }
+
+        const response = await fetch('/api/conversations/review', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            shop,
+            conversationId,
+            reviewStatus,
+          }),
+        });
+        const data = await response.json();
+
+        if (!response.ok) {
+          setMessage(data.error || 'Could not update the conversation review.', 'error');
+          return;
+        }
+
+        setMessage('Conversation review updated.', 'info');
+        loadStatus({ silent: true });
       }
 
       async function resolveSessionShop() {
@@ -1650,6 +1774,16 @@ function renderMerchantAppWorkspace(initialShop) {
 
       themeHintBtn.addEventListener('click', () => {
         themeHint.classList.toggle('hidden');
+      });
+      historySearch.addEventListener('input', () => renderHistory(latestConversations));
+      historyFilter.addEventListener('change', () => renderHistory(latestConversations));
+      historyList.addEventListener('click', (event) => {
+        const button = event.target.closest('[data-action][data-id]');
+        if (!button) {
+          return;
+        }
+
+        handleConversationReview(button.getAttribute('data-id'), button.getAttribute('data-action'));
       });
 
       document.getElementById('accentColor').addEventListener('input', (event) => {
@@ -2218,6 +2352,40 @@ app.get('/api/conversations', (req, res) => {
   });
 });
 
+app.post('/api/conversations/review', (req, res) => {
+  const shop = typeof req.body.shop === 'string' ? req.body.shop.trim() : '';
+  const conversationId =
+    typeof req.body.conversationId === 'string' ? req.body.conversationId.trim() : '';
+  const reviewStatus =
+    typeof req.body.reviewStatus === 'string' ? req.body.reviewStatus.trim() : '';
+  const merchantNote =
+    typeof req.body.merchantNote === 'string' ? req.body.merchantNote : '';
+
+  if (!conversationId) {
+    return res.status(400).json({
+      error: 'Conversation id is required.',
+    });
+  }
+
+  const updatedEntry = updateConversationReview({
+    shop,
+    conversationId,
+    reviewStatus,
+    merchantNote,
+  });
+
+  if (!updatedEntry) {
+    return res.status(404).json({
+      error: 'Conversation not found for this shop.',
+    });
+  }
+
+  return res.json({
+    shop: getConversationHistoryKey(shop),
+    conversation: updatedEntry,
+  });
+});
+
 app.get('/api/usage-stats', (req, res) => {
   const queryShop = typeof req.query.shop === 'string' ? req.query.shop.trim() : '';
   const shop = isValidShopDomain(queryShop) ? queryShop : getMerchantSessionShop(req);
@@ -2551,6 +2719,21 @@ ${userQuestion}`,
   }
 });
 
-app.listen(port, '0.0.0.0', () => {
-  console.log(`Server running at http://0.0.0.0:${port}`);
-});
+async function startServer() {
+  try {
+    const persistedState = await persistence.loadState();
+    hydrateMapFromObject(shopifySessions, persistedState.shopifySessions);
+    hydrateMapFromObject(merchantSettings, persistedState.merchantSettings);
+    hydrateMapFromObject(conversationHistory, persistedState.conversationHistory);
+    hydrateMapFromObject(usageStats, persistedState.usageStats);
+
+    app.listen(port, '0.0.0.0', () => {
+      console.log(`Server running at http://0.0.0.0:${port}`);
+    });
+  } catch (error) {
+    console.error('Failed to initialize persistence:', error);
+    process.exit(1);
+  }
+}
+
+startServer();

@@ -222,6 +222,8 @@ function App() {
   const [isAsking, setIsAsking] = useState(false);
   const [isSyncingShopify, setIsSyncingShopify] = useState(false);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
+  const [historySearch, setHistorySearch] = useState('');
+  const [historyFilter, setHistoryFilter] = useState('all');
   const [error, setError] = useState('');
   const [infoMessage, setInfoMessage] = useState('Preparing your merchant dashboard.');
 
@@ -592,6 +594,31 @@ function App() {
     }
   }
 
+  async function handleReviewConversation(conversationId, reviewStatus) {
+    try {
+      const response = await fetch('/api/conversations/review', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          shop: shopDomain.trim(),
+          conversationId,
+          reviewStatus,
+        }),
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Could not update the conversation review.');
+      }
+
+      setInfoMessage('Conversation review updated.');
+      loadDashboardData(shopDomain.trim(), { silent: true });
+    } catch (reviewError) {
+      setInfoMessage('');
+      setError(reviewError.message || 'Could not update the conversation review.');
+    }
+  }
+
   function handleQuickQuestion(nextQuestion) {
     setQuestion(nextQuestion);
     setError('');
@@ -708,6 +735,13 @@ function App() {
         : !merchantSettings.botEnabled
           ? 'Re-enable the support agent when you are ready to expose it on the storefront.'
           : 'Test a real customer question and review the reply in the merchant test center.';
+  const visibleConversationLogs = conversationLogs.filter((entry) => {
+    const reviewStatus = entry.reviewStatus || 'unreviewed';
+    const matchesFilter = historyFilter === 'all' ? true : reviewStatus === historyFilter;
+    const haystack = `${entry.question || ''} ${entry.reply || ''}`.toLowerCase();
+    const matchesSearch = !historySearch.trim() || haystack.includes(historySearch.trim().toLowerCase());
+    return matchesFilter && matchesSearch;
+  });
 
   return (
     <>
@@ -1299,8 +1333,29 @@ function App() {
                 <div className={`badge ${conversationLogs.length ? 'ready' : 'loading'}`}>{conversationLogs.length ? `${conversationLogs.length} logged` : 'No logs yet'}</div>
               </div>
               {conversationLogs.length ? (
+                <div className="split" style={{ marginBottom: '16px' }}>
+                  <input
+                    className="input"
+                    type="text"
+                    placeholder="Search questions or replies"
+                    value={historySearch}
+                    onChange={(event) => setHistorySearch(event.target.value)}
+                  />
+                  <select
+                    className="select"
+                    value={historyFilter}
+                    onChange={(event) => setHistoryFilter(event.target.value)}
+                  >
+                    <option value="all">All reviews</option>
+                    <option value="unreviewed">Unreviewed</option>
+                    <option value="trusted">Trusted</option>
+                    <option value="needs_review">Needs review</option>
+                  </select>
+                </div>
+              ) : null}
+              {conversationLogs.length ? (
                 <div className="logList">
-                  {conversationLogs.map((entry) => (
+                  {visibleConversationLogs.length ? visibleConversationLogs.map((entry) => (
                     <div key={entry.id} className="logCard">
                       <div className="logMeta">
                         <div className="logTag">{entry.channel === 'storefront_widget' ? 'Storefront widget' : 'Merchant test'}</div>
@@ -1311,6 +1366,7 @@ function App() {
                       <div className="logReply">{entry.reply || 'No reply stored.'}</div>
                       <div className="logSupport" style={{ marginTop: '10px' }}>
                         <div className="logTag">{entry.grounding?.label || 'Unknown grounding'}</div>
+                        <div className="logTag">{(entry.reviewStatus || 'unreviewed').replaceAll('_', ' ')}</div>
                         {Array.isArray(entry.usedSources) && entry.usedSources.length
                           ? entry.usedSources.map((source) => (
                               <div key={`${entry.id}-${source.id}`} className="logTag">
@@ -1319,8 +1375,31 @@ function App() {
                             ))
                           : <div className="logTag">No source detail saved</div>}
                       </div>
+                      <div className="row" style={{ marginTop: '12px' }}>
+                        <button
+                          type="button"
+                          className="secondary"
+                          onClick={() => handleReviewConversation(entry.id, 'trusted')}
+                        >
+                          Mark trusted
+                        </button>
+                        <button
+                          type="button"
+                          className="secondary"
+                          onClick={() => handleReviewConversation(entry.id, 'needs_review')}
+                        >
+                          Needs review
+                        </button>
+                        <button
+                          type="button"
+                          className="secondary"
+                          onClick={() => handleReviewConversation(entry.id, 'unreviewed')}
+                        >
+                          Clear review
+                        </button>
+                      </div>
                     </div>
-                  ))}
+                  )) : <div className="note">No conversations match the current review filters.</div>}
                 </div>
               ) : (
                 <div className="note">Once a merchant or storefront customer asks a question, the conversation log will appear here.</div>
