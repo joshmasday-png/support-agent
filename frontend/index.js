@@ -161,6 +161,20 @@ function normalizeUsageStatsPayload(payload) {
   };
 }
 
+function normalizeBillingPayload(payload) {
+  const summary = payload && payload.summary && typeof payload.summary === 'object' ? payload.summary : {};
+  return {
+    enabled: Boolean(summary.enabled),
+    planName: summary.planName || 'StoreReply Pro',
+    recurringPriceLabel: summary.recurringPriceLabel || '$19.00',
+    interval: summary.interval || 'EVERY_30_DAYS',
+    status: summary.status || 'INACTIVE',
+    currentPeriodEnd: summary.currentPeriodEnd || null,
+    test: Boolean(summary.test),
+    trialDays: typeof summary.trialDays === 'number' ? summary.trialDays : 0,
+  };
+}
+
 function App() {
   const initialSurface =
     window.location.hash.replace('#', '') === 'customer' ? 'customer' : 'merchant';
@@ -183,6 +197,16 @@ function App() {
     cachedRepliesServed: 0,
     lastAskedAt: null,
     todayCount: 0,
+  });
+  const [billing, setBilling] = useState({
+    enabled: false,
+    planName: 'StoreReply Pro',
+    recurringPriceLabel: '$19.00',
+    interval: 'EVERY_30_DAYS',
+    status: 'INACTIVE',
+    currentPeriodEnd: null,
+    test: true,
+    trialDays: 7,
   });
   const [merchantSettings, setMerchantSettings] = useState({
     assistantName: 'StoreReply Support',
@@ -244,14 +268,21 @@ function App() {
     const params = new URLSearchParams(window.location.search);
     const connectedShop = params.get('shop');
     const connectedFlag = params.get('shopify');
+    const billingFlag = params.get('billing');
     if (connectedShop) {
       setShopDomain(connectedShop);
       loadDashboardData(connectedShop);
     }
     if (connectedFlag === 'connected') {
       setInfoMessage(`Shopify connected for ${connectedShop || 'your store'}. You can sync knowledge now.`);
+    }
+    if (billingFlag === 'confirmed') {
+      setInfoMessage('Subscription approval returned to the app. Refreshing billing status now.');
+    }
+    if (connectedFlag === 'connected' || billingFlag === 'confirmed') {
       params.delete('shop');
       params.delete('shopify');
+      params.delete('billing');
       const nextUrl = `${window.location.pathname}${params.toString() ? `?${params.toString()}` : ''}`;
       window.history.replaceState({}, '', nextUrl);
     }
@@ -311,6 +342,7 @@ function App() {
 
       setConversationLogs(Array.isArray(data.conversations) ? data.conversations : []);
       setUsageStats(normalizeUsageStatsPayload(data.usage));
+      setBilling(normalizeBillingPayload(data.billing));
     } catch (dashboardError) {
       if (!options.silent) {
         setError(dashboardError.message || 'Could not load merchant dashboard data.');
@@ -513,6 +545,44 @@ function App() {
       setError(settingsError.message || 'Could not save merchant settings.');
     } finally {
       setIsSavingSettings(false);
+    }
+  }
+
+  async function handleStartBilling() {
+    if (!shopDomain.trim()) {
+      setError('Enter a Shopify store domain before starting billing.');
+      return;
+    }
+
+    setError('');
+    setInfoMessage('Preparing the Shopify subscription approval screen.');
+
+    try {
+      const response = await fetch('/api/billing/subscribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ shop: shopDomain.trim() }),
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Could not start the subscription flow.');
+      }
+
+      if (data.alreadyActive) {
+        setInfoMessage('This store already has an active StoreReply subscription.');
+        loadDashboardData(shopDomain.trim(), { silent: true });
+        return;
+      }
+
+      if (!data.confirmationUrl) {
+        throw new Error('Shopify did not return a subscription confirmation URL.');
+      }
+
+      window.location.assign(data.confirmationUrl);
+    } catch (billingError) {
+      setInfoMessage('');
+      setError(billingError.message || 'Could not start the subscription flow.');
     }
   }
 
@@ -1172,6 +1242,46 @@ function App() {
                 <span className="meta">{isAsking ? 'Waiting for backend response' : 'Latest result'}</span>
               </div>
               <div className="reply">{reply}</div>
+            </section>
+
+            <section className="card">
+              <div className="cardHead">
+                <div>
+                  <h2>Billing and plan</h2>
+                  <div className="copy">Keep billing inside the app so merchants can activate the StoreReply plan without leaving the hosted product flow.</div>
+                </div>
+                <div className={`badge ${billing.enabled ? 'ready' : 'loading'}`}>
+                  {billing.enabled ? 'Plan active' : 'Billing needed'}
+                </div>
+              </div>
+              <div className="miniGrid">
+                <div className="miniCard">
+                  <div className="miniLabel">Current plan</div>
+                  <div className="miniValue">{billing.planName}</div>
+                  <div className="copy" style={{ marginTop: '8px' }}>
+                    {billing.recurringPriceLabel} {billing.interval.toLowerCase().replaceAll('_', ' ')}
+                  </div>
+                </div>
+                <div className="miniCard">
+                  <div className="miniLabel">Plan status</div>
+                  <div className="miniValue">{billing.enabled ? 'Active' : 'Inactive'}</div>
+                  <div className="copy" style={{ marginTop: '8px' }}>
+                    {billing.enabled
+                      ? `Status: ${billing.status}${billing.currentPeriodEnd ? ` until ${formatTimestamp(billing.currentPeriodEnd)}` : ''}${billing.test ? ' · Test mode' : ''}`
+                      : `Requires activation${billing.trialDays ? ` · ${billing.trialDays}-day trial` : ''}${billing.test ? ' · Test mode' : ''}`}
+                  </div>
+                </div>
+              </div>
+              <div className="row">
+                <button
+                  type="button"
+                  className="primary"
+                  onClick={handleStartBilling}
+                  disabled={!shopDomain.trim() || !shopifyStatus.connected || billing.enabled}
+                >
+                  {billing.enabled ? 'Plan active' : 'Activate paid plan'}
+                </button>
+              </div>
             </section>
 
             <section className="card">

@@ -24,6 +24,15 @@ const shopifyConfig = {
     process.env.SHOPIFY_AFTER_AUTH_REDIRECT || 'http://localhost:3000/?shopify=connected',
 };
 
+const billingConfig = {
+  planName: process.env.SHOPIFY_BILLING_PLAN_NAME || 'StoreReply Pro',
+  amount: Number(process.env.SHOPIFY_BILLING_AMOUNT || 19),
+  currencyCode: process.env.SHOPIFY_BILLING_CURRENCY || 'USD',
+  interval: process.env.SHOPIFY_BILLING_INTERVAL || 'EVERY_30_DAYS',
+  trialDays: Number(process.env.SHOPIFY_BILLING_TRIAL_DAYS || 7),
+  test: String(process.env.SHOPIFY_BILLING_TEST || 'true').toLowerCase() !== 'false',
+};
+
 const merchantKnowledgeTemplate = {
   sourceTemplates: [
     {
@@ -632,6 +641,105 @@ function buildHostedMerchantAppUrl(shop, connected) {
   return appUrl.toString();
 }
 
+function buildBillingReturnUrl(shop) {
+  const appUrl = new URL(shopifyConfig.appUrl.replace(/\/$/, ''));
+
+  if (isValidShopDomain(shop)) {
+    appUrl.searchParams.set('shop', shop);
+  }
+
+  appUrl.searchParams.set('billing', 'confirmed');
+  return appUrl.toString();
+}
+
+function formatMoney(amount, currencyCode) {
+  const numericAmount = Number(amount);
+
+  if (!Number.isFinite(numericAmount)) {
+    return `${amount} ${currencyCode}`;
+  }
+
+  try {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: currencyCode || 'USD',
+      maximumFractionDigits: 2,
+    }).format(numericAmount);
+  } catch (error) {
+    return `${numericAmount.toFixed(2)} ${currencyCode}`;
+  }
+}
+
+function normalizeSubscriptionLineItems(lineItems) {
+  if (!Array.isArray(lineItems)) {
+    return [];
+  }
+
+  return lineItems.map((lineItem) => {
+    const pricingDetails = lineItem?.plan?.pricingDetails || {};
+    const amount = pricingDetails?.price?.amount || null;
+    const currencyCode = pricingDetails?.price?.currencyCode || '';
+
+    return {
+      interval: pricingDetails?.interval || '',
+      price: amount,
+      priceLabel: amount ? formatMoney(amount, currencyCode) : '',
+      currencyCode,
+    };
+  });
+}
+
+function normalizeActiveSubscription(subscription) {
+  if (!subscription || typeof subscription !== 'object') {
+    return null;
+  }
+
+  const lineItems = normalizeSubscriptionLineItems(subscription.lineItems);
+
+  return {
+    id: subscription.id || '',
+    name: subscription.name || billingConfig.planName,
+    status: subscription.status || 'UNKNOWN',
+    test: Boolean(subscription.test),
+    trialDays: typeof subscription.trialDays === 'number' ? subscription.trialDays : billingConfig.trialDays,
+    currentPeriodEnd: subscription.currentPeriodEnd || null,
+    lineItems,
+    recurringPriceLabel:
+      lineItems.find((lineItem) => lineItem.priceLabel)?.priceLabel ||
+      formatMoney(billingConfig.amount, billingConfig.currencyCode),
+    interval:
+      lineItems.find((lineItem) => lineItem.interval)?.interval || billingConfig.interval,
+  };
+}
+
+function buildBillingSummary(activeSubscription) {
+  if (!activeSubscription) {
+    return {
+      enabled: false,
+      requiresSubscription: true,
+      planName: billingConfig.planName,
+      recurringPriceLabel: formatMoney(billingConfig.amount, billingConfig.currencyCode),
+      interval: billingConfig.interval,
+      trialDays: billingConfig.trialDays,
+      test: billingConfig.test,
+      status: 'INACTIVE',
+      currentPeriodEnd: null,
+    };
+  }
+
+  return {
+    enabled: true,
+    requiresSubscription: true,
+    planName: activeSubscription.name,
+    recurringPriceLabel: activeSubscription.recurringPriceLabel,
+    interval: activeSubscription.interval,
+    trialDays: activeSubscription.trialDays,
+    test: activeSubscription.test,
+    status: activeSubscription.status,
+    currentPeriodEnd: activeSubscription.currentPeriodEnd,
+  };
+}
+
 function escapeHtml(value) {
   return String(value || '')
     .replace(/&/g, '&amp;')
@@ -917,6 +1025,8 @@ function renderMerchantAppWorkspace(initialShop) {
       .miniCard,.historyCard{padding:14px;border:1px solid var(--line);border-radius:18px;background:#fff}
       .miniLabel{font-size:.8rem;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
       .miniValue{font-size:1rem;font-weight:800;margin-top:6px;line-height:1.45}
+      .billingValue{font-size:1.35rem;font-weight:800;margin-top:8px}
+      .billingNote{margin-top:10px;color:var(--muted);line-height:1.55;font-size:.92rem}
       .label{display:flex;justify-content:space-between;gap:12px;margin-bottom:10px;font-weight:700;font-size:.95rem}.meta{color:var(--muted);font-weight:600}
       .input,.area,.select{width:100%;border:1px solid var(--line);border-radius:16px;background:var(--card);color:var(--ink)}
       .input,.select{padding:14px 15px}.area{min-height:120px;padding:16px 17px;line-height:1.65}
@@ -1103,6 +1213,32 @@ function renderMerchantAppWorkspace(initialShop) {
           <section class="card">
             <div class="cardHead">
               <div>
+                <h2>Billing and plan</h2>
+                <div class="copy">This keeps billing in the hosted Shopify app so merchants can activate the paid plan without touching external setup pages.</div>
+              </div>
+              <div id="billingBadge" class="badge loading">Checking plan</div>
+            </div>
+            <div class="miniGrid">
+              <div class="miniCard">
+                <div class="miniLabel">Current plan</div>
+                <div id="billingPlanName" class="billingValue">StoreReply Pro</div>
+                <div id="billingPrice" class="billingNote">$19.00 every 30 days</div>
+              </div>
+              <div class="miniCard">
+                <div class="miniLabel">Plan status</div>
+                <div id="billingStatusValue" class="billingValue">Inactive</div>
+                <div id="billingMeta" class="billingNote">Connect a store to check whether billing is already active.</div>
+              </div>
+            </div>
+            <div class="row">
+              <button id="billingBtn" class="primary" type="button">Activate paid plan</button>
+            </div>
+            <div id="billingHint" class="helper">Use test mode first while the app is still in development, then switch the plan to live billing later.</div>
+          </section>
+
+          <section class="card">
+            <div class="cardHead">
+              <div>
                 <h2>Usage summary</h2>
                 <div class="copy">Review how often the support agent is being used without leaving the app page.</div>
               </div>
@@ -1171,6 +1307,8 @@ function renderMerchantAppWorkspace(initialShop) {
       const params = new URLSearchParams(window.location.search);
       const historyList = document.getElementById('historyList');
       const historySummaryMeta = document.getElementById('historySummaryMeta');
+      const billingBtn = document.getElementById('billingBtn');
+      const billingBadge = document.getElementById('billingBadge');
 
       function setMessage(message, type) {
         statusMessage.className = 'msg ' + (type === 'error' ? 'error' : 'info');
@@ -1236,6 +1374,8 @@ function renderMerchantAppWorkspace(initialShop) {
         const usage = data.usage || {};
         const stats = usage.stats || {};
         const conversations = Array.isArray(data.conversations) ? data.conversations : [];
+        const billing = data.billing || {};
+        const billingSummary = billing.summary || {};
 
         connectionBadge.textContent = shopifyStatus.connected ? 'Connected' : 'Not connected';
         connectionBadge.className = 'badge ' + (shopifyStatus.connected ? 'ready' : 'loading');
@@ -1253,6 +1393,24 @@ function renderMerchantAppWorkspace(initialShop) {
         document.getElementById('metricCache').textContent = stats.cachedRepliesServed || 0;
         document.getElementById('metricLastActivity').textContent = stats.lastAskedAt ? new Date(stats.lastAskedAt).toLocaleString() : 'No activity';
         document.getElementById('usageMeta').textContent = stats.lastAskedAt ? 'Last activity: ' + new Date(stats.lastAskedAt).toLocaleString() : 'No usage yet.';
+
+        const billingActive = Boolean(billingSummary.enabled);
+        const billingStatus = billingSummary.status || 'INACTIVE';
+        const currentPeriodEnd = billingSummary.currentPeriodEnd
+          ? new Date(billingSummary.currentPeriodEnd).toLocaleDateString()
+          : '';
+        document.getElementById('billingPlanName').textContent = billingSummary.planName || 'StoreReply Pro';
+        document.getElementById('billingPrice').textContent =
+          (billingSummary.recurringPriceLabel || '$19.00') + ' ' +
+          String(billingSummary.interval || 'EVERY_30_DAYS').toLowerCase().replaceAll('_', ' ');
+        document.getElementById('billingStatusValue').textContent = billingActive ? 'Active' : 'Inactive';
+        document.getElementById('billingMeta').textContent = billingActive
+          ? ('Status: ' + billingStatus + (currentPeriodEnd ? ' · Renews through ' + currentPeriodEnd : '') + (billingSummary.test ? ' · Test mode' : ''))
+          : ('Plan required before launch' + (billingSummary.trialDays ? ' · ' + billingSummary.trialDays + ' day trial' : '') + (billingSummary.test ? ' · Test mode' : ''));
+        billingBadge.textContent = billingActive ? 'Plan active' : 'Billing needed';
+        billingBadge.className = 'badge ' + (billingActive ? 'ready' : 'loading');
+        billingBtn.textContent = billingActive ? 'Plan active' : 'Activate paid plan';
+        billingBtn.disabled = !shopifyStatus.connected || billingActive;
 
         document.getElementById('assistantName').value = settings.assistantName || '';
         document.getElementById('welcomeMessage').value = settings.welcomeMessage || '';
@@ -1350,6 +1508,49 @@ function renderMerchantAppWorkspace(initialShop) {
         loadStatus({ silent: true });
       });
 
+      billingBtn.addEventListener('click', async () => {
+        const shop = shopDomainInput.value.trim();
+        if (!shop) {
+          setMessage('Enter a Shopify store domain first.', 'error');
+          return;
+        }
+
+        billingBtn.disabled = true;
+        billingBadge.textContent = 'Preparing plan';
+        billingBadge.className = 'badge loading';
+
+        const response = await fetch('/api/billing/subscribe', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ shop }),
+        });
+        const data = await response.json();
+
+        if (!response.ok) {
+          billingBtn.disabled = false;
+          billingBadge.textContent = 'Billing needed';
+          billingBadge.className = 'badge error';
+          setMessage(data.error || 'Could not start the subscription flow.', 'error');
+          return;
+        }
+
+        if (data.alreadyActive) {
+          setMessage('This store already has an active StoreReply plan.', 'info');
+          loadStatus({ silent: true });
+          return;
+        }
+
+        if (!data.confirmationUrl) {
+          billingBtn.disabled = false;
+          billingBadge.textContent = 'Billing needed';
+          billingBadge.className = 'badge error';
+          setMessage('Shopify did not return a subscription confirmation URL.', 'error');
+          return;
+        }
+
+        window.location.assign(data.confirmationUrl);
+      });
+
       saveSettingsBtn.addEventListener('click', async () => {
         const shop = shopDomainInput.value.trim();
         settingsBadge.textContent = 'Saving...';
@@ -1409,6 +1610,9 @@ function renderMerchantAppWorkspace(initialShop) {
 
       if (params.get('shopify') === 'connected') {
         setMessage('Shopify connected. You can sync knowledge now.', 'info');
+      }
+      if (params.get('billing') === 'confirmed') {
+        setMessage('Subscription approval returned to the app. Refreshing billing status now.', 'info');
       }
 
       loadStatus();
@@ -1490,7 +1694,7 @@ async function exchangeCodeForAccessToken(shop, code) {
   return data.access_token;
 }
 
-async function runShopifyGraphQL(shop, accessToken, query) {
+async function runShopifyGraphQL(shop, accessToken, query, variables = undefined) {
   const response = await fetch(
     `https://${shop}/admin/api/${shopifyConfig.apiVersion}/graphql.json`,
     {
@@ -1499,7 +1703,9 @@ async function runShopifyGraphQL(shop, accessToken, query) {
         'Content-Type': 'application/json',
         'X-Shopify-Access-Token': accessToken,
       },
-      body: JSON.stringify({ query }),
+      body: JSON.stringify(
+        variables && typeof variables === 'object' ? { query, variables } : { query }
+      ),
     }
   );
 
@@ -1514,6 +1720,175 @@ async function runShopifyGraphQL(shop, accessToken, query) {
   }
 
   return data.data;
+}
+
+async function getBillingStatus(shop) {
+  if (!isValidShopDomain(shop)) {
+    return {
+      connected: false,
+      activeSubscription: null,
+      summary: buildBillingSummary(null),
+    };
+  }
+
+  const session = shopifySessions.get(shop);
+
+  if (!session?.accessToken) {
+    return {
+      connected: false,
+      activeSubscription: null,
+      summary: buildBillingSummary(null),
+    };
+  }
+
+  const query = `
+    query BillingStatus {
+      currentAppInstallation {
+        activeSubscriptions {
+          id
+          name
+          status
+          test
+          trialDays
+          currentPeriodEnd
+          lineItems {
+            plan {
+              pricingDetails {
+                __typename
+                ... on AppRecurringPricing {
+                  interval
+                  price {
+                    amount
+                    currencyCode
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  `;
+
+  const data = await runShopifyGraphQL(shop, session.accessToken, query);
+  const activeSubscription = normalizeActiveSubscription(
+    data?.currentAppInstallation?.activeSubscriptions?.[0] || null
+  );
+
+  return {
+    connected: true,
+    activeSubscription,
+    summary: buildBillingSummary(activeSubscription),
+  };
+}
+
+async function createBillingSubscription(shop) {
+  if (!isValidShopDomain(shop)) {
+    throw new Error('Enter a valid Shopify store domain like example-store.myshopify.com.');
+  }
+
+  const session = shopifySessions.get(shop);
+
+  if (!session?.accessToken) {
+    throw new Error('This shop is not connected yet.');
+  }
+
+  const existingBilling = await getBillingStatus(shop);
+
+  if (existingBilling.activeSubscription) {
+    return {
+      alreadyActive: true,
+      activeSubscription: existingBilling.activeSubscription,
+      summary: existingBilling.summary,
+      confirmationUrl: null,
+    };
+  }
+
+  const mutation = `
+    mutation CreateAppSubscription(
+      $name: String!
+      $returnUrl: URL!
+      $test: Boolean!
+      $trialDays: Int
+      $lineItems: [AppSubscriptionLineItemInput!]!
+      $replacementBehavior: AppSubscriptionReplacementBehavior!
+    ) {
+      appSubscriptionCreate(
+        name: $name
+        returnUrl: $returnUrl
+        test: $test
+        trialDays: $trialDays
+        lineItems: $lineItems
+        replacementBehavior: $replacementBehavior
+      ) {
+        userErrors {
+          field
+          message
+        }
+        confirmationUrl
+        appSubscription {
+          id
+          name
+          status
+          test
+          trialDays
+          currentPeriodEnd
+          lineItems {
+            plan {
+              pricingDetails {
+                __typename
+                ... on AppRecurringPricing {
+                  interval
+                  price {
+                    amount
+                    currencyCode
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  `;
+
+  const variables = {
+    name: billingConfig.planName,
+    returnUrl: buildBillingReturnUrl(shop),
+    test: billingConfig.test,
+    trialDays: billingConfig.trialDays,
+    replacementBehavior: 'APPLY_IMMEDIATELY',
+    lineItems: [
+      {
+        plan: {
+          appRecurringPricingDetails: {
+            price: {
+              amount: billingConfig.amount,
+              currencyCode: billingConfig.currencyCode,
+            },
+            interval: billingConfig.interval,
+          },
+        },
+      },
+    ],
+  };
+
+  const data = await runShopifyGraphQL(shop, session.accessToken, mutation, variables);
+  const result = data?.appSubscriptionCreate;
+  const userErrors = Array.isArray(result?.userErrors) ? result.userErrors : [];
+
+  if (userErrors.length > 0) {
+    throw new Error(userErrors[0].message || 'Could not create the Shopify subscription.');
+  }
+
+  const activeSubscription = normalizeActiveSubscription(result?.appSubscription || null);
+
+  return {
+    alreadyActive: false,
+    activeSubscription,
+    summary: buildBillingSummary(activeSubscription),
+    confirmationUrl: result?.confirmationUrl || null,
+  };
 }
 
 function buildShopifyKnowledgeSources(data) {
@@ -1736,19 +2111,28 @@ app.get('/api/dashboard-bootstrap', (req, res) => {
   const settingsResult = getMerchantSettings(shop);
   const today = new Date().toISOString().slice(0, 10);
 
-  res.json({
-    shop: settingsResult.key,
-    shopifyStatus: getShopifyStatus(shop),
-    settings: settingsResult.settings,
-    conversations: conversationResult.conversations,
-    usage: {
-      stats: usageResult.stats,
-      todayCount:
-        usageResult.stats.daily && typeof usageResult.stats.daily[today] === 'number'
-          ? usageResult.stats.daily[today]
-          : 0,
-    },
-  });
+  return getBillingStatus(shop)
+    .then((billing) => {
+      res.json({
+        shop: settingsResult.key,
+        shopifyStatus: getShopifyStatus(shop),
+        settings: settingsResult.settings,
+        conversations: conversationResult.conversations,
+        usage: {
+          stats: usageResult.stats,
+          todayCount:
+            usageResult.stats.daily && typeof usageResult.stats.daily[today] === 'number'
+              ? usageResult.stats.daily[today]
+              : 0,
+        },
+        billing,
+      });
+    })
+    .catch((error) => {
+      res.status(500).json({
+        error: error.message || 'Could not load billing status.',
+      });
+    });
 });
 
 app.get('/api/conversations', (req, res) => {
@@ -1774,6 +2158,22 @@ app.get('/api/usage-stats', (req, res) => {
         ? result.stats.daily[today]
         : 0,
   });
+});
+
+app.get('/api/billing/status', async (req, res) => {
+  const shop = typeof req.query.shop === 'string' ? req.query.shop.trim() : '';
+
+  try {
+    const billing = await getBillingStatus(shop);
+    res.json({
+      shop: isValidShopDomain(shop) ? shop : '',
+      ...billing,
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: error.message || 'Could not load billing status.',
+    });
+  }
 });
 
 app.post('/api/merchant-settings', (req, res) => {
@@ -1912,6 +2312,22 @@ app.post('/api/shopify/sync', async (req, res) => {
     console.error('Shopify sync failed:', error);
     return res.status(500).json({
       error: error.message || 'Shopify sync failed.',
+    });
+  }
+});
+
+app.post('/api/billing/subscribe', async (req, res) => {
+  const shop = typeof req.body.shop === 'string' ? req.body.shop.trim() : '';
+
+  try {
+    const result = await createBillingSubscription(shop);
+    res.json({
+      shop,
+      ...result,
+    });
+  } catch (error) {
+    res.status(400).json({
+      error: error.message || 'Could not start the Shopify subscription flow.',
     });
   }
 });
