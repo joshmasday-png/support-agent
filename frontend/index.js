@@ -224,6 +224,7 @@ function App() {
   const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [historySearch, setHistorySearch] = useState('');
   const [historyFilter, setHistoryFilter] = useState('all');
+  const [reviewNotes, setReviewNotes] = useState({});
   const [error, setError] = useState('');
   const [infoMessage, setInfoMessage] = useState('Preparing your merchant dashboard.');
 
@@ -309,6 +310,18 @@ function App() {
 
     return () => window.clearInterval(intervalId);
   }, [shopDomain, surface]);
+
+  useEffect(() => {
+    setReviewNotes((current) => {
+      const next = { ...current };
+      conversationLogs.forEach((entry) => {
+        if (!(entry.id in next)) {
+          next[entry.id] = entry.merchantNote || '';
+        }
+      });
+      return next;
+    });
+  }, [conversationLogs]);
 
   async function fetchShopifyStatus(shop) {
     if (!shop.trim()) {
@@ -619,6 +632,31 @@ function App() {
     }
   }
 
+  async function handleSaveReviewNote(conversationId) {
+    try {
+      const response = await fetch('/api/conversations/review', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          shop: shopDomain.trim(),
+          conversationId,
+          merchantNote: reviewNotes[conversationId] || '',
+        }),
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Could not save the merchant note.');
+      }
+
+      setInfoMessage('Merchant note saved.');
+      loadDashboardData(shopDomain.trim(), { silent: true });
+    } catch (noteError) {
+      setInfoMessage('');
+      setError(noteError.message || 'Could not save the merchant note.');
+    }
+  }
+
   function handleQuickQuestion(nextQuestion) {
     setQuestion(nextQuestion);
     setError('');
@@ -742,6 +780,16 @@ function App() {
     const matchesSearch = !historySearch.trim() || haystack.includes(historySearch.trim().toLowerCase());
     return matchesFilter && matchesSearch;
   });
+  const reviewSummary = conversationLogs.reduce(
+    (summary, entry) => {
+      const status = entry.reviewStatus || 'unreviewed';
+      if (status === 'trusted') summary.trusted += 1;
+      else if (status === 'needs_review') summary.needsReview += 1;
+      else summary.unreviewed += 1;
+      return summary;
+    },
+    { trusted: 0, needsReview: 0, unreviewed: 0 }
+  );
 
   return (
     <>
@@ -1333,6 +1381,26 @@ function App() {
                 <div className={`badge ${conversationLogs.length ? 'ready' : 'loading'}`}>{conversationLogs.length ? `${conversationLogs.length} logged` : 'No logs yet'}</div>
               </div>
               {conversationLogs.length ? (
+                <div className="miniGrid" style={{ marginBottom: '16px' }}>
+                  <div className="miniCard">
+                    <div className="miniLabel">Trusted</div>
+                    <div className="miniValue">{reviewSummary.trusted}</div>
+                  </div>
+                  <div className="miniCard">
+                    <div className="miniLabel">Needs review</div>
+                    <div className="miniValue">{reviewSummary.needsReview}</div>
+                  </div>
+                  <div className="miniCard">
+                    <div className="miniLabel">Unreviewed</div>
+                    <div className="miniValue">{reviewSummary.unreviewed}</div>
+                  </div>
+                  <div className="miniCard">
+                    <div className="miniLabel">Visible now</div>
+                    <div className="miniValue">{visibleConversationLogs.length}</div>
+                  </div>
+                </div>
+              ) : null}
+              {conversationLogs.length ? (
                 <div className="split" style={{ marginBottom: '16px' }}>
                   <input
                     className="input"
@@ -1397,6 +1465,29 @@ function App() {
                         >
                           Clear review
                         </button>
+                      </div>
+                      <div style={{ marginTop: '12px' }}>
+                        <textarea
+                          className="area"
+                          style={{ minHeight: '90px' }}
+                          placeholder="Optional merchant note about why this answer is trusted or needs review"
+                          value={reviewNotes[entry.id] ?? entry.merchantNote ?? ''}
+                          onChange={(event) =>
+                            setReviewNotes((current) => ({
+                              ...current,
+                              [entry.id]: event.target.value,
+                            }))
+                          }
+                        />
+                        <div className="row" style={{ marginTop: '10px' }}>
+                          <button
+                            type="button"
+                            className="secondary"
+                            onClick={() => handleSaveReviewNote(entry.id)}
+                          >
+                            Save note
+                          </button>
+                        </div>
                       </div>
                     </div>
                   )) : <div className="note">No conversations match the current review filters.</div>}

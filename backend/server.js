@@ -1354,6 +1354,12 @@ function renderMerchantAppWorkspace(initialShop) {
               </summary>
               <div class="historyBody">
                 <div class="note" style="margin-bottom:12px">History stays tucked away here so it is available when needed without taking over the whole merchant screen.</div>
+                <div class="miniGrid" style="margin-bottom:12px">
+                  <div class="miniCard"><div class="miniLabel">Trusted</div><div id="historyTrustedCount" class="miniValue">0</div></div>
+                  <div class="miniCard"><div class="miniLabel">Needs review</div><div id="historyNeedsReviewCount" class="miniValue">0</div></div>
+                  <div class="miniCard"><div class="miniLabel">Unreviewed</div><div id="historyUnreviewedCount" class="miniValue">0</div></div>
+                  <div class="miniCard"><div class="miniLabel">Visible now</div><div id="historyVisibleCount" class="miniValue">0</div></div>
+                </div>
                 <div class="toolbar">
                   <input id="historySearch" class="input" type="text" placeholder="Search customer questions or replies" />
                   <select id="historyFilter" class="select">
@@ -1417,6 +1423,7 @@ function renderMerchantAppWorkspace(initialShop) {
       const billingBtn = document.getElementById('billingBtn');
       const billingBadge = document.getElementById('billingBadge');
       let latestConversations = [];
+      let reviewNoteDrafts = {};
 
       function setMessage(message, type) {
         statusMessage.className = 'msg ' + (type === 'error' ? 'error' : 'info');
@@ -1454,7 +1461,22 @@ function renderMerchantAppWorkspace(initialShop) {
 
       function renderHistory(conversations) {
         latestConversations = Array.isArray(conversations) ? conversations : [];
+        reviewNoteDrafts = latestConversations.reduce((drafts, entry) => {
+          drafts[entry.id] = reviewNoteDrafts[entry.id] ?? entry.merchantNote ?? '';
+          return drafts;
+        }, {});
         const visibleConversations = applyHistoryFilters(latestConversations);
+        const reviewSummary = latestConversations.reduce((summary, entry) => {
+          const status = entry.reviewStatus || 'unreviewed';
+          if (status === 'trusted') summary.trusted += 1;
+          else if (status === 'needs_review') summary.needsReview += 1;
+          else summary.unreviewed += 1;
+          return summary;
+        }, { trusted: 0, needsReview: 0, unreviewed: 0 });
+        document.getElementById('historyTrustedCount').textContent = reviewSummary.trusted;
+        document.getElementById('historyNeedsReviewCount').textContent = reviewSummary.needsReview;
+        document.getElementById('historyUnreviewedCount').textContent = reviewSummary.unreviewed;
+        document.getElementById('historyVisibleCount').textContent = visibleConversations.length;
 
         if (!latestConversations.length) {
           historySummaryMeta.textContent = 'No conversations yet';
@@ -1500,6 +1522,10 @@ function renderMerchantAppWorkspace(initialShop) {
               '<button class="reviewBtn ' + (reviewStatus === 'trusted' ? 'active' : '') + '" data-action="trusted" data-id="' + escapeBrowserHtml(entry.id) + '">Mark trusted</button>' +
               '<button class="reviewBtn warn ' + (reviewStatus === 'needs_review' ? 'active' : '') + '" data-action="needs_review" data-id="' + escapeBrowserHtml(entry.id) + '">Needs review</button>' +
               '<button class="reviewBtn ' + (reviewStatus === 'unreviewed' ? 'active' : '') + '" data-action="unreviewed" data-id="' + escapeBrowserHtml(entry.id) + '">Clear review</button>' +
+            '</div>' +
+            '<textarea class="area noteInput" data-note-for="' + escapeBrowserHtml(entry.id) + '" placeholder="Optional merchant note about this answer">' + escapeBrowserHtml(reviewNoteDrafts[entry.id] || entry.merchantNote || '') + '</textarea>' +
+            '<div class="reviewRow">' +
+              '<button class="reviewBtn" data-action="save-note" data-id="' + escapeBrowserHtml(entry.id) + '">Save note</button>' +
             '</div>' +
           '</div>';
         }).join('');
@@ -1617,6 +1643,33 @@ function renderMerchantAppWorkspace(initialShop) {
         }
 
         setMessage('Conversation review updated.', 'info');
+        loadStatus({ silent: true });
+      }
+
+      async function handleSaveConversationNote(conversationId) {
+        const shop = shopDomainInput.value.trim();
+        if (!shop) {
+          setMessage('Enter a Shopify store domain before reviewing conversations.', 'error');
+          return;
+        }
+
+        const response = await fetch('/api/conversations/review', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            shop,
+            conversationId,
+            merchantNote: reviewNoteDrafts[conversationId] || '',
+          }),
+        });
+        const data = await response.json();
+
+        if (!response.ok) {
+          setMessage(data.error || 'Could not save the merchant note.', 'error');
+          return;
+        }
+
+        setMessage('Merchant note saved.', 'info');
         loadStatus({ silent: true });
       }
 
@@ -1782,8 +1835,22 @@ function renderMerchantAppWorkspace(initialShop) {
         if (!button) {
           return;
         }
+        const action = button.getAttribute('data-action');
+        const id = button.getAttribute('data-id');
+        if (action === 'save-note') {
+          handleSaveConversationNote(id);
+          return;
+        }
 
-        handleConversationReview(button.getAttribute('data-id'), button.getAttribute('data-action'));
+        handleConversationReview(id, action);
+      });
+      historyList.addEventListener('input', (event) => {
+        const noteTarget = event.target.closest('[data-note-for]');
+        if (!noteTarget) {
+          return;
+        }
+
+        reviewNoteDrafts[noteTarget.getAttribute('data-note-for')] = noteTarget.value;
       });
 
       document.getElementById('accentColor').addEventListener('input', (event) => {
