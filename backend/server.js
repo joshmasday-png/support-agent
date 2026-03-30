@@ -6,6 +6,7 @@ const path = require('path');
 const express = require('express');
 const cors = require('cors');
 const OpenAI = require('openai');
+const jwt = require('jsonwebtoken');
 const { createPersistence } = require('./db');
 
 const app = express();
@@ -707,6 +708,40 @@ function getMerchantSessionShop(req) {
   return shop;
 }
 
+function getSessionTokenClaims(req) {
+  const authHeader = typeof req.headers.authorization === 'string' ? req.headers.authorization : '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
+
+  if (!token || !shopifyConfig.apiSecret || !shopifyConfig.apiKey) {
+    return null;
+  }
+
+  try {
+    return jwt.verify(token, shopifyConfig.apiSecret, {
+      algorithms: ['HS256'],
+      audience: shopifyConfig.apiKey,
+    });
+  } catch (error) {
+    return null;
+  }
+}
+
+function getEmbeddedShopFromRequest(req) {
+  const claims = getSessionTokenClaims(req);
+
+  if (!claims || typeof claims.dest !== 'string') {
+    return '';
+  }
+
+  try {
+    const destination = new URL(claims.dest);
+    const host = destination.hostname;
+    return isValidShopDomain(host) ? host : '';
+  } catch (error) {
+    return '';
+  }
+}
+
 function setMerchantSessionCookie(res, shop) {
   const cookieValue = createMerchantSessionCookieValue(shop);
 
@@ -724,6 +759,22 @@ function setMerchantSessionCookie(res, shop) {
   ];
 
   if (isSecure) {
+    parts.push('Secure');
+  }
+
+  res.setHeader('Set-Cookie', parts.join('; '));
+}
+
+function clearMerchantSessionCookie(res) {
+  const parts = [
+    'storereply_shop=',
+    'Path=/',
+    'HttpOnly',
+    'SameSite=Lax',
+    'Max-Age=0',
+  ];
+
+  if (shopifyConfig.appUrl.startsWith('https://')) {
     parts.push('Secure');
   }
 
@@ -1081,6 +1132,10 @@ function renderMerchantAppPage(initialShop) {
 
 function renderMerchantAppWorkspace(initialShop) {
   const shopValue = isValidShopDomain(initialShop) ? initialShop : '';
+  const appBridgeMeta = shopifyConfig.apiKey
+    ? `<meta name="shopify-api-key" content="${escapeHtml(shopifyConfig.apiKey)}" />
+    <script src="https://cdn.shopify.com/shopifycloud/app-bridge.js"></script>`
+    : '';
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -1088,6 +1143,7 @@ function renderMerchantAppWorkspace(initialShop) {
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>StoreReply Merchant App</title>
+    ${appBridgeMeta}
     <style>
       :root{--card:#fffdf9;--ink:#17324d;--muted:#5d748d;--line:#d6e1ec;--accent:#d8633d;--ok:#e8f7ef;--okText:#176541;--warn:#fff4df;--warnText:#8a5a08;--err:#fff0ec;--errText:#932f16}
       *{box-sizing:border-box}body{margin:0;font-family:"Trebuchet MS","Segoe UI",sans-serif;background:linear-gradient(160deg,#f4eee4 0%,#dce8f4 100%);color:var(--ink)}
@@ -1158,6 +1214,7 @@ function renderMerchantAppWorkspace(initialShop) {
           <div class="pill">Merchant-owned settings</div>
           <div class="pill">Shopify sync</div>
           <div class="pill">History and usage</div>
+          <div id="sessionPill" class="pill">Checking sign-in</div>
         </div>
       </section>
 
@@ -1254,6 +1311,7 @@ function renderMerchantAppWorkspace(initialShop) {
               <button id="connectBtn" class="secondary" type="button">Connect Shopify</button>
               <button id="syncBtn" class="secondary" type="button">Sync Shopify data</button>
               <button id="refreshBtn" class="secondary" type="button">Refresh status</button>
+              <button id="switchShopBtn" class="secondary" type="button">Switch store</button>
             </div>
             <div class="helper">Use this area only for store connection and knowledge import. Storefront appearance stays in the Shopify theme editor.</div>
           </section>
@@ -1408,6 +1466,7 @@ function renderMerchantAppWorkspace(initialShop) {
       const connectBtn = document.getElementById('connectBtn');
       const syncBtn = document.getElementById('syncBtn');
       const refreshBtn = document.getElementById('refreshBtn');
+      const switchShopBtn = document.getElementById('switchShopBtn');
       const saveSettingsBtn = document.getElementById('saveSettingsBtn');
       const themeHintBtn = document.getElementById('themeHintBtn');
       const themeHint = document.getElementById('themeHint');
@@ -1422,8 +1481,29 @@ function renderMerchantAppWorkspace(initialShop) {
       const historyFilter = document.getElementById('historyFilter');
       const billingBtn = document.getElementById('billingBtn');
       const billingBadge = document.getElementById('billingBadge');
+      const sessionPill = document.getElementById('sessionPill');
       let latestConversations = [];
       let reviewNoteDrafts = {};
+
+      async function appFetch(url, options = {}) {
+        const headers = new Headers(options.headers || {});
+
+        if (window.shopify && typeof window.shopify.idToken === 'function') {
+          try {
+            const token = await window.shopify.idToken();
+            if (token) {
+              headers.set('Authorization', 'Bearer ' + token);
+            }
+          } catch (error) {
+            // Fall back cleanly for non-embedded or local sessions.
+          }
+        }
+
+        return fetch(url, {
+          ...options,
+          headers,
+        });
+      }
 
       function setMessage(message, type) {
         statusMessage.className = 'msg ' + (type === 'error' ? 'error' : 'info');
@@ -1626,7 +1706,7 @@ function renderMerchantAppWorkspace(initialShop) {
           return;
         }
 
-        const response = await fetch('/api/conversations/review', {
+        const response = await appFetch('/api/conversations/review', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -1653,7 +1733,7 @@ function renderMerchantAppWorkspace(initialShop) {
           return;
         }
 
-        const response = await fetch('/api/conversations/review', {
+        const response = await appFetch('/api/conversations/review', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -1674,13 +1754,16 @@ function renderMerchantAppWorkspace(initialShop) {
       }
 
       async function resolveSessionShop() {
-        const response = await fetch('/api/session');
+        const response = await appFetch('/api/session');
         const data = await response.json();
 
         if (!response.ok) {
           throw new Error(data.error || 'Could not load the current merchant session.');
         }
 
+        sessionPill.textContent = data.connected
+          ? 'Signed in as ' + (data.shop || 'connected store')
+          : (data.embedded ? 'Embedded auth ready' : 'Using session cookie');
         return data.shop || '';
       }
 
@@ -1696,7 +1779,7 @@ function renderMerchantAppWorkspace(initialShop) {
 
         if (!shop) return;
 
-        const response = await fetch('/api/dashboard-bootstrap?shop=' + encodeURIComponent(shop));
+        const response = await appFetch('/api/dashboard-bootstrap?shop=' + encodeURIComponent(shop));
         const data = await response.json();
         if (!response.ok) {
           if (!options.silent) {
@@ -1714,7 +1797,7 @@ function renderMerchantAppWorkspace(initialShop) {
           return;
         }
 
-        const response = await fetch('/api/shopify/start?shop=' + encodeURIComponent(shop));
+        const response = await appFetch('/api/shopify/start?shop=' + encodeURIComponent(shop));
         const data = await response.json();
         if (!response.ok) {
           setMessage(data.error || 'Could not start Shopify install.', 'error');
@@ -1730,7 +1813,7 @@ function renderMerchantAppWorkspace(initialShop) {
           return;
         }
 
-        const response = await fetch('/api/shopify/sync', {
+        const response = await appFetch('/api/shopify/sync', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ shop }),
@@ -1755,7 +1838,7 @@ function renderMerchantAppWorkspace(initialShop) {
         billingBadge.textContent = 'Preparing plan';
         billingBadge.className = 'badge loading';
 
-        const response = await fetch('/api/billing/subscribe', {
+        const response = await appFetch('/api/billing/subscribe', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ shop }),
@@ -1792,7 +1875,7 @@ function renderMerchantAppWorkspace(initialShop) {
         settingsBadge.textContent = 'Saving...';
         settingsBadge.className = 'badge loading';
 
-        const response = await fetch('/api/merchant-settings', {
+        const response = await appFetch('/api/merchant-settings', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -1823,6 +1906,12 @@ function renderMerchantAppWorkspace(initialShop) {
       refreshBtn.addEventListener('click', async () => {
         await loadStatus();
         setMessage('Merchant app status refreshed.', 'info');
+      });
+      switchShopBtn.addEventListener('click', async () => {
+        await appFetch('/api/session/clear', { method: 'POST' });
+        shopDomainInput.value = '';
+        sessionPill.textContent = 'Store session cleared';
+        setMessage('Store session cleared. Enter a different Shopify store domain to connect again.', 'info');
       });
 
       themeHintBtn.addEventListener('click', () => {
@@ -2309,7 +2398,9 @@ if (fs.existsSync(frontendDistDirectory)) {
 
 app.get('/', (req, res) => {
   const queryShop = typeof req.query.shop === 'string' ? req.query.shop.trim() : '';
-  const shop = isValidShopDomain(queryShop) ? queryShop : getMerchantSessionShop(req);
+  const shop = isValidShopDomain(queryShop)
+    ? queryShop
+    : getEmbeddedShopFromRequest(req) || getMerchantSessionShop(req);
   return res.send(renderMerchantAppWorkspace(shop));
 });
 
@@ -2340,22 +2431,32 @@ app.get('/api/shopify/config', (req, res) => {
 
 app.get('/api/shopify/status', (req, res) => {
   const queryShop = typeof req.query.shop === 'string' ? req.query.shop.trim() : '';
-  const shop = isValidShopDomain(queryShop) ? queryShop : getMerchantSessionShop(req);
+  const shop = isValidShopDomain(queryShop)
+    ? queryShop
+    : getEmbeddedShopFromRequest(req) || getMerchantSessionShop(req);
   res.json(getShopifyStatus(shop));
 });
 
 app.get('/api/session', (req, res) => {
-  const shop = getMerchantSessionShop(req);
+  const shop = getEmbeddedShopFromRequest(req) || getMerchantSessionShop(req);
 
   res.json({
     shop,
     connected: Boolean(shop && shopifySessions.get(shop)?.accessToken),
+    embedded: Boolean(getSessionTokenClaims(req)),
   });
+});
+
+app.post('/api/session/clear', (req, res) => {
+  clearMerchantSessionCookie(res);
+  res.json({ ok: true });
 });
 
 app.get('/api/merchant-settings', (req, res) => {
   const queryShop = typeof req.query.shop === 'string' ? req.query.shop.trim() : '';
-  const shop = isValidShopDomain(queryShop) ? queryShop : getMerchantSessionShop(req);
+  const shop = isValidShopDomain(queryShop)
+    ? queryShop
+    : getEmbeddedShopFromRequest(req) || getMerchantSessionShop(req);
   const result = getMerchantSettings(shop);
 
   res.json({
@@ -2378,7 +2479,9 @@ app.get('/api/widget-config', (req, res) => {
 
 app.get('/api/dashboard-bootstrap', (req, res) => {
   const queryShop = typeof req.query.shop === 'string' ? req.query.shop.trim() : '';
-  const shop = isValidShopDomain(queryShop) ? queryShop : getMerchantSessionShop(req);
+  const shop = isValidShopDomain(queryShop)
+    ? queryShop
+    : getEmbeddedShopFromRequest(req) || getMerchantSessionShop(req);
   const usageResult = getUsageStats(shop);
   const conversationResult = getConversationHistory(shop);
   const settingsResult = getMerchantSettings(shop);
@@ -2410,7 +2513,9 @@ app.get('/api/dashboard-bootstrap', (req, res) => {
 
 app.get('/api/conversations', (req, res) => {
   const queryShop = typeof req.query.shop === 'string' ? req.query.shop.trim() : '';
-  const shop = isValidShopDomain(queryShop) ? queryShop : getMerchantSessionShop(req);
+  const shop = isValidShopDomain(queryShop)
+    ? queryShop
+    : getEmbeddedShopFromRequest(req) || getMerchantSessionShop(req);
   const result = getConversationHistory(shop);
 
   res.json({
@@ -2455,7 +2560,9 @@ app.post('/api/conversations/review', (req, res) => {
 
 app.get('/api/usage-stats', (req, res) => {
   const queryShop = typeof req.query.shop === 'string' ? req.query.shop.trim() : '';
-  const shop = isValidShopDomain(queryShop) ? queryShop : getMerchantSessionShop(req);
+  const shop = isValidShopDomain(queryShop)
+    ? queryShop
+    : getEmbeddedShopFromRequest(req) || getMerchantSessionShop(req);
   const result = getUsageStats(shop);
   const today = new Date().toISOString().slice(0, 10);
 
@@ -2471,7 +2578,9 @@ app.get('/api/usage-stats', (req, res) => {
 
 app.get('/api/billing/status', async (req, res) => {
   const queryShop = typeof req.query.shop === 'string' ? req.query.shop.trim() : '';
-  const shop = isValidShopDomain(queryShop) ? queryShop : getMerchantSessionShop(req);
+  const shop = isValidShopDomain(queryShop)
+    ? queryShop
+    : getEmbeddedShopFromRequest(req) || getMerchantSessionShop(req);
 
   try {
     const billing = await getBillingStatus(shop);
