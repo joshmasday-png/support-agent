@@ -1485,12 +1485,19 @@ function renderMerchantAppWorkspace(initialShop) {
       let latestConversations = [];
       let reviewNoteDrafts = {};
 
+      function setSessionPill(message) {
+        sessionPill.textContent = message;
+      }
+
       async function appFetch(url, options = {}) {
         const headers = new Headers(options.headers || {});
 
         if (window.shopify && typeof window.shopify.idToken === 'function') {
           try {
-            const token = await window.shopify.idToken();
+            const token = await Promise.race([
+              window.shopify.idToken(),
+              new Promise((resolve) => setTimeout(() => resolve(''), 1500)),
+            ]);
             if (token) {
               headers.set('Authorization', 'Bearer ' + token);
             }
@@ -1754,17 +1761,35 @@ function renderMerchantAppWorkspace(initialShop) {
       }
 
       async function resolveSessionShop() {
-        const response = await appFetch('/api/session');
-        const data = await response.json();
+        try {
+          const response = await appFetch('/api/session');
+          const data = await response.json();
 
-        if (!response.ok) {
-          throw new Error(data.error || 'Could not load the current merchant session.');
+          if (!response.ok) {
+            throw new Error(data.error || 'Could not load the current merchant session.');
+          }
+
+          if (data.connected && data.shop) {
+            setSessionPill('Signed in as ' + data.shop);
+            return data.shop;
+          }
+
+          if (data.shop) {
+            setSessionPill('Store detected: ' + data.shop);
+            return data.shop;
+          }
+
+          if (data.embedded) {
+            setSessionPill('Embedded auth ready');
+            return '';
+          }
+
+          setSessionPill('Using session cookie');
+          return '';
+        } catch (error) {
+          setSessionPill('Sign-in status unavailable');
+          return '';
         }
-
-        sessionPill.textContent = data.connected
-          ? 'Signed in as ' + (data.shop || 'connected store')
-          : (data.embedded ? 'Embedded auth ready' : 'Using session cookie');
-        return data.shop || '';
       }
 
       async function loadStatus(options = {}) {
@@ -1777,7 +1802,12 @@ function renderMerchantAppWorkspace(initialShop) {
           }
         }
 
-        if (!shop) return;
+        if (!shop) {
+          if (sessionPill.textContent === 'Checking sign-in') {
+            setSessionPill('Enter store to connect');
+          }
+          return;
+        }
 
         const response = await appFetch('/api/dashboard-bootstrap?shop=' + encodeURIComponent(shop));
         const data = await response.json();
