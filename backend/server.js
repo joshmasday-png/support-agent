@@ -1630,6 +1630,13 @@ function renderMerchantAppWorkspace(initialShop) {
         connectionBadge.textContent = shopifyStatus.connected ? 'Connected' : 'Not connected';
         connectionBadge.className = 'badge ' + (shopifyStatus.connected ? 'ready' : 'loading');
         syncMeta.textContent = shopifyStatus.syncedAt ? 'Last sync: ' + shopifyStatus.syncedAt : 'Not synced yet';
+        setSessionPill(
+          shopifyStatus.connected && shopifyStatus.shop
+            ? 'Signed in as ' + shopifyStatus.shop
+            : (shopDomainInput.value.trim()
+                ? 'Store detected: ' + shopDomainInput.value.trim()
+                : 'Enter store to connect')
+        );
 
         document.getElementById('metricConnection').textContent = shopifyStatus.connected ? 'Live' : 'Pending';
         document.getElementById('metricConnectionCopy').textContent = shopifyStatus.connected
