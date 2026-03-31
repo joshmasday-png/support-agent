@@ -2058,6 +2058,62 @@ function verifyShopifyHmac(query) {
   return provided.length === expected.length && crypto.timingSafeEqual(provided, expected);
 }
 
+function verifyShopifyWebhookHmac(rawBody, hmacHeader) {
+  if (!shopifyConfig.apiSecret || !Buffer.isBuffer(rawBody) || !rawBody.length) {
+    return false;
+  }
+
+  if (typeof hmacHeader !== 'string' || !hmacHeader.trim()) {
+    return false;
+  }
+
+  const expectedHmac = crypto
+    .createHmac('sha256', shopifyConfig.apiSecret)
+    .update(rawBody)
+    .digest('base64');
+  const provided = Buffer.from(hmacHeader.trim(), 'utf8');
+  const expected = Buffer.from(expectedHmac, 'utf8');
+
+  return provided.length === expected.length && crypto.timingSafeEqual(provided, expected);
+}
+
+function parseShopifyWebhookBody(rawBody) {
+  if (!Buffer.isBuffer(rawBody) || !rawBody.length) {
+    return {};
+  }
+
+  try {
+    return JSON.parse(rawBody.toString('utf8'));
+  } catch (error) {
+    return {};
+  }
+}
+
+function handleShopifyWebhook(req, res, handler) {
+  const webhookHmac = req.get('x-shopify-hmac-sha256');
+
+  if (!verifyShopifyWebhookHmac(req.body, webhookHmac)) {
+    return res.status(401).send('Invalid webhook signature.');
+  }
+
+  const topic = req.get('x-shopify-topic') || '';
+  const shop = req.get('x-shopify-shop-domain') || '';
+  const payload = parseShopifyWebhookBody(req.body);
+
+  try {
+    handler({
+      topic,
+      shop,
+      payload,
+      webhookId: req.get('x-shopify-webhook-id') || '',
+    });
+    return res.status(200).send('OK');
+  } catch (error) {
+    console.error(`Shopify webhook handler failed for ${topic || req.path}:`, error);
+    return res.status(500).send('Webhook handler failed.');
+  }
+}
+
 async function exchangeCodeForAccessToken(shop, code) {
   const response = await fetch(`https://${shop}/admin/oauth/access_token`, {
     method: 'POST',
@@ -2423,6 +2479,81 @@ function buildWidgetConfig(shop) {
 }
 
 app.use(cors());
+
+const shopifyWebhookParser = express.raw({ type: 'application/json', limit: '2mb' });
+
+app.post('/webhooks/app/uninstalled', shopifyWebhookParser, (req, res) =>
+  handleShopifyWebhook(req, res, ({ shop }) => {
+    if (isValidShopDomain(shop)) {
+      shopifySessions.delete(shop);
+      merchantSettings.delete(shop);
+      conversationHistory.delete(shop);
+      usageStats.delete(shop);
+      savePersistedState(shopifySessions, merchantSettings, conversationHistory, usageStats);
+    }
+  })
+);
+
+app.post('/webhooks/app/scopes_update', shopifyWebhookParser, (req, res) =>
+  handleShopifyWebhook(req, res, ({ shop, payload }) => {
+    if (!isValidShopDomain(shop)) {
+      return;
+    }
+
+    const session = shopifySessions.get(shop);
+
+    if (!session) {
+      return;
+    }
+
+    shopifySessions.set(shop, {
+      ...session,
+      lastScopesUpdateAt: new Date().toISOString(),
+      scopes: Array.isArray(payload?.current) ? payload.current : session.scopes || [],
+    });
+    savePersistedState(shopifySessions, merchantSettings, conversationHistory, usageStats);
+  })
+);
+
+app.post('/webhooks/customers/data_request', shopifyWebhookParser, (req, res) =>
+  handleShopifyWebhook(req, res, ({ shop, payload, webhookId }) => {
+    console.log('Received Shopify customers/data_request webhook', {
+      shop,
+      webhookId,
+      customerId: payload?.customer?.id || null,
+      ordersRequested: Array.isArray(payload?.orders_requested) ? payload.orders_requested.length : 0,
+    });
+  })
+);
+
+app.post('/webhooks/customers/redact', shopifyWebhookParser, (req, res) =>
+  handleShopifyWebhook(req, res, ({ shop, payload, webhookId }) => {
+    console.log('Received Shopify customers/redact webhook', {
+      shop,
+      webhookId,
+      customerId: payload?.customer?.id || null,
+    });
+  })
+);
+
+app.post('/webhooks/shop/redact', shopifyWebhookParser, (req, res) =>
+  handleShopifyWebhook(req, res, ({ shop, payload, webhookId }) => {
+    console.log('Received Shopify shop/redact webhook', {
+      shop,
+      webhookId,
+      shopId: payload?.shop_id || null,
+    });
+
+    if (isValidShopDomain(shop)) {
+      shopifySessions.delete(shop);
+      merchantSettings.delete(shop);
+      conversationHistory.delete(shop);
+      usageStats.delete(shop);
+      savePersistedState(shopifySessions, merchantSettings, conversationHistory, usageStats);
+    }
+  })
+);
+
 app.use(express.json({ limit: '2mb' }));
 
 if (fs.existsSync(frontendDistDirectory)) {
