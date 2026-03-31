@@ -1516,7 +1516,7 @@ function renderMerchantAppWorkspace(initialShop) {
           try {
             const token = await Promise.race([
               window.shopify.idToken(),
-              new Promise((resolve) => setTimeout(() => resolve(''), 1500)),
+              new Promise((resolve) => setTimeout(() => resolve(''), 450)),
             ]);
             if (token) {
               headers.set('Authorization', 'Bearer ' + token);
@@ -1854,9 +1854,21 @@ function renderMerchantAppWorkspace(initialShop) {
           return;
         }
 
+        connectBtn.disabled = true;
+        connectBtn.textContent = 'Connecting...';
+        connectionBadge.textContent = 'Connecting';
+        connectionBadge.className = 'badge loading';
+        setSessionPill('Starting Shopify sign-in');
+        setMessage('Connecting to Shopify. If prompted, complete the approval in the top-level window.', 'info');
+
         const response = await appFetch('/api/shopify/start?shop=' + encodeURIComponent(shop));
         const data = await response.json();
         if (!response.ok) {
+          connectBtn.disabled = false;
+          connectBtn.textContent = 'Connect Shopify';
+          connectionBadge.textContent = 'Not connected';
+          connectionBadge.className = 'badge error';
+          setSessionPill(shop ? 'Store detected: ' + shop : 'Enter store to connect');
           setMessage(data.error || 'Could not start Shopify install.', 'error');
           return;
         }
@@ -2016,9 +2028,17 @@ function renderMerchantAppWorkspace(initialShop) {
 
       if (params.get('shopify') === 'connected') {
         setMessage('Shopify connected. You can sync knowledge now.', 'info');
+        connectionBadge.textContent = 'Refreshing';
+        connectionBadge.className = 'badge loading';
+        setSessionPill(shopDomainInput.value.trim() ? 'Store detected: ' + shopDomainInput.value.trim() : 'Refreshing sign-in');
+        loadStatus({ silent: true });
+        setTimeout(() => loadStatus({ silent: true }), 700);
+        setTimeout(() => loadStatus({ silent: true }), 1800);
       }
       if (params.get('billing') === 'confirmed') {
         setMessage('Subscription approval returned to the app. Refreshing billing status now.', 'info');
+        loadStatus({ silent: true });
+        setTimeout(() => loadStatus({ silent: true }), 900);
       }
 
       loadStatus();
