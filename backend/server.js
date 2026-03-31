@@ -1489,6 +1489,26 @@ function renderMerchantAppWorkspace(initialShop) {
         sessionPill.textContent = message;
       }
 
+      function redirectToTopLevel(url) {
+        try {
+          window.open(url, '_top');
+          return;
+        } catch (error) {
+          // Fall back below if the browser blocks window.open here.
+        }
+
+        try {
+          if (window.top && window.top !== window.self) {
+            window.top.location.assign(url);
+            return;
+          }
+        } catch (error) {
+          // Accessing window.top can fail in cross-origin embedded contexts.
+        }
+
+        window.location.assign(url);
+      }
+
       async function appFetch(url, options = {}) {
         const headers = new Headers(options.headers || {});
 
@@ -1840,7 +1860,7 @@ function renderMerchantAppWorkspace(initialShop) {
           setMessage(data.error || 'Could not start Shopify install.', 'error');
           return;
         }
-        window.location.assign(data.authUrl);
+        redirectToTopLevel(data.authUrl);
       });
 
       syncBtn.addEventListener('click', async () => {
@@ -1904,7 +1924,7 @@ function renderMerchantAppWorkspace(initialShop) {
           return;
         }
 
-        window.location.assign(data.confirmationUrl);
+        redirectToTopLevel(data.confirmationUrl);
       });
 
       saveSettingsBtn.addEventListener('click', async () => {
