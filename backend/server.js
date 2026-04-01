@@ -889,6 +889,75 @@ function escapeHtml(value) {
     .replace(/'/g, '&#39;');
 }
 
+function renderPublicInfoPage({ title, eyebrow, intro, sections }) {
+  const renderedSections = (Array.isArray(sections) ? sections : [])
+    .map((section) => {
+      const items = (Array.isArray(section.items) ? section.items : [])
+        .map((item) => `<li>${escapeHtml(item)}</li>`)
+        .join('');
+      const body = (Array.isArray(section.paragraphs) ? section.paragraphs : [])
+        .map((paragraph) => `<p>${escapeHtml(paragraph)}</p>`)
+        .join('');
+
+      return `<section class="card">
+        <h2>${escapeHtml(section.heading || '')}</h2>
+        ${body}
+        ${items ? `<ul>${items}</ul>` : ''}
+      </section>`;
+    })
+    .join('');
+
+  return `<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>${escapeHtml(title)} | Zypher - Support Agent</title>
+    <style>
+      :root{--ink:#17324d;--muted:#5d748d;--line:#d6e1ec;--card:#fffdf9;--accent:#d8633d}
+      *{box-sizing:border-box}
+      body{margin:0;font-family:"Trebuchet MS","Segoe UI",sans-serif;background:linear-gradient(160deg,#f4eee4 0%,#dce8f4 100%);color:var(--ink)}
+      a{color:#1f5673}
+      .shell{width:min(980px,calc(100% - 32px));margin:0 auto;padding:28px 0 44px}
+      .hero,.card{background:rgba(255,253,249,.94);border:1px solid rgba(23,50,77,.1);border-radius:24px;box-shadow:0 24px 60px rgba(23,50,77,.08)}
+      .hero{padding:32px;background:linear-gradient(135deg,#183557 0%,#23557a 60%,#2d7686 100%);color:#fff}
+      .eyebrow{display:inline-flex;align-items:center;padding:7px 12px;border-radius:999px;background:rgba(255,255,255,.12);font-size:12px;letter-spacing:.08em;text-transform:uppercase}
+      h1{margin:16px 0 10px;font-size:clamp(2rem,5vw,3.2rem);line-height:1}
+      h2{margin:0 0 12px;font-size:1.22rem}
+      .hero p,.card p,.card li{line-height:1.7}
+      .hero p{margin:0;max-width:760px;color:rgba(255,253,248,.88)}
+      .nav{display:flex;flex-wrap:wrap;gap:10px;margin-top:18px}
+      .nav a{display:inline-flex;align-items:center;padding:10px 14px;border-radius:999px;background:rgba(255,255,255,.12);color:#fff;text-decoration:none;font-weight:700}
+      .stack{display:grid;gap:18px;margin-top:18px}
+      .card{padding:24px}
+      .card p{margin:0 0 12px;color:var(--muted)}
+      .card ul{margin:0;padding-left:20px;color:var(--muted)}
+      .footer{margin-top:18px;color:var(--muted);font-size:.92rem}
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <section class="hero">
+        <div class="eyebrow">${escapeHtml(eyebrow)}</div>
+        <h1>${escapeHtml(title)}</h1>
+        <p>${escapeHtml(intro)}</p>
+        <div class="nav">
+          <a href="/privacy-policy">Privacy policy</a>
+          <a href="/help-center">Help center</a>
+          <a href="/contact">Contact</a>
+        </div>
+      </section>
+      <div class="stack">
+        ${renderedSections}
+      </div>
+      <div class="footer">
+        Zypher - Support Agent is hosted at ${escapeHtml(shopifyConfig.appUrl || 'this public app URL')}.
+      </div>
+    </div>
+  </body>
+</html>`;
+}
+
 function renderMerchantAppPage(initialShop) {
   const shopValue = isValidShopDomain(initialShop) ? initialShop : '';
 
@@ -2603,6 +2672,113 @@ if (fs.existsSync(frontendDistDirectory)) {
     res.sendFile(path.join(frontendDistDirectory, 'index.html'));
   });
 }
+
+app.get('/privacy-policy', (req, res) => {
+  res.send(
+    renderPublicInfoPage({
+      title: 'Privacy Policy',
+      eyebrow: 'Legal',
+      intro:
+        'This policy explains how Zypher - Support Agent uses merchant and store data to power customer support features inside Shopify.',
+      sections: [
+        {
+          heading: 'What data the app uses',
+          paragraphs: [
+            'Zypher - Support Agent uses merchant-provided store information such as Shopify policies, online store pages, support settings, usage data, and customer support conversations that occur through the app.',
+            'When merchants connect Shopify, the app may access store content needed to answer support questions, including policy text and selected storefront pages.',
+          ],
+        },
+        {
+          heading: 'How data is used',
+          paragraphs: [
+            'The app uses this data only to provide the support agent service, including syncing store knowledge, generating customer support responses, showing merchant analytics, and helping merchants review conversation quality.',
+            'The app does not use merchant store data for unrelated advertising purposes and does not sell merchant data.',
+          ],
+        },
+        {
+          heading: 'Service providers and storage',
+          paragraphs: [
+            'Data may be processed by hosting, database, and AI service providers that are required to run the app. These providers are used only to operate and improve the support agent service.',
+            'Merchant settings, usage records, and conversation history may be stored so the app can function reliably across sessions and deployments.',
+          ],
+        },
+        {
+          heading: 'Merchant control and requests',
+          paragraphs: [
+            'Merchants can uninstall the app at any time. Shopify compliance webhooks are supported for customer data requests and deletion-related events.',
+            'For privacy questions or data requests related to the app, contact support using the details on the contact page.',
+          ],
+        },
+      ],
+    })
+  );
+});
+
+app.get('/help-center', (req, res) => {
+  res.send(
+    renderPublicInfoPage({
+      title: 'Help Center',
+      eyebrow: 'Support',
+      intro:
+        'Quick answers for merchants using Zypher - Support Agent in Shopify.',
+      sections: [
+        {
+          heading: 'Getting started',
+          items: [
+            'Install the app in Shopify admin.',
+            'Open the app and connect your Shopify store.',
+            'Run a Shopify sync to import policies and storefront pages.',
+            'Enable the widget in Online Store > Themes > Customize > App embeds.',
+          ],
+        },
+        {
+          heading: 'Where settings live',
+          items: [
+            'Use the app dashboard for assistant behavior, merchant defaults, usage, and review tools.',
+            'Use the Shopify theme editor for widget position, appearance, and storefront layout controls.',
+          ],
+        },
+        {
+          heading: 'Common questions',
+          items: [
+            'If answers are vague, improve your store policies and pages, then sync again.',
+            'If the storefront widget cannot reach the backend, confirm the embed Backend base URL points to the live hosted app.',
+            'If Shopify auth appears slow, complete approval in the top-level window and return to the app.',
+          ],
+        },
+      ],
+    })
+  );
+});
+
+app.get('/contact', (req, res) => {
+  res.send(
+    renderPublicInfoPage({
+      title: 'Contact',
+      eyebrow: 'Support',
+      intro:
+        'Need help with Zypher - Support Agent? Use the information below to reach support.',
+      sections: [
+        {
+          heading: 'Support contact',
+          paragraphs: [
+            'Email: support@zypher-demo.com',
+            'Support hours: Monday to Friday, 9 AM to 6 PM local time.',
+            'Expected response time: within 1 business day.',
+          ],
+        },
+        {
+          heading: 'What to include',
+          items: [
+            'Your Shopify store domain',
+            'A short description of the issue',
+            'Any screenshots or steps to reproduce the problem',
+          ],
+        },
+      ],
+    })
+  );
+});
 
 app.get('/', (req, res) => {
   const queryShop = typeof req.query.shop === 'string' ? req.query.shop.trim() : '';
