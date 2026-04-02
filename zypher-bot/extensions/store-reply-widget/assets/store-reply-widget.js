@@ -54,7 +54,6 @@
     const accentColor = root.dataset.accentColor;
     const shopDomain = root.dataset.shopDomain || '';
     const backendUrl = normalizeBaseUrl(root.dataset.backendUrl);
-    const subtitleSetting = root.dataset.subtitle || 'Zypher support agent';
     const backendHeaders = {
       'ngrok-skip-browser-warning': 'true',
     };
@@ -127,8 +126,8 @@
         }
 
         const settings = data.settings || {};
-        title.textContent = settings.assistantName || root.dataset.launcherLabel || 'Zypher Support Agent';
-        subtitle.textContent = subtitleSetting || 'Zypher support agent';
+        title.textContent = 'Zypher';
+        subtitle.textContent = 'Support Agent';
         input.placeholder = settings.placeholderText || 'Ask a question...';
         thread.innerHTML = '';
         appendBubble(
