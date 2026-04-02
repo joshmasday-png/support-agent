@@ -1800,6 +1800,28 @@ function renderMerchantAppWorkspace(initialShop) {
         renderHistory(conversations);
       }
 
+      function applySavedSettings(settings) {
+        document.getElementById('assistantName').value = settings.assistantName || '';
+        document.getElementById('welcomeMessage').value = settings.welcomeMessage || '';
+        document.getElementById('placeholderText').value = settings.placeholderText || '';
+        document.getElementById('tone').value = settings.tone || 'friendly';
+        document.getElementById('accentColor').value = settings.accentColor || '#d8633d';
+        document.getElementById('accentColorText').value = settings.accentColor || '#d8633d';
+        document.getElementById('botEnabled').checked = settings.botEnabled !== false;
+        document.getElementById('botEnabledLabel').textContent = settings.botEnabled === false ? 'Paused' : 'Enabled';
+
+        const hasDefaults = Boolean((settings.assistantName || '').trim() && (settings.welcomeMessage || '').trim());
+        const botEnabled = settings.botEnabled !== false;
+        setStateBadge('opSettingsState', hasDefaults);
+        setStateBadge('opBotState', botEnabled);
+        document.getElementById('opSettingsCopy').textContent = hasDefaults
+          ? 'Assistant voice and greeting are configured.'
+          : 'Save the assistant name and welcome message merchants want customers to see.';
+        document.getElementById('opBotCopy').textContent = botEnabled
+          ? 'The support agent is enabled and ready for storefront questions.'
+          : 'The support agent is paused. Merchants can keep settings saved while the storefront stays quiet.';
+      }
+
       async function handleConversationReview(conversationId, reviewStatus) {
         const shop = shopDomainInput.value.trim();
         if (!shop) {
@@ -2008,8 +2030,16 @@ function renderMerchantAppWorkspace(initialShop) {
 
       saveSettingsBtn.addEventListener('click', async () => {
         const shop = shopDomainInput.value.trim();
+        if (!shop) {
+          settingsBadge.textContent = 'App settings';
+          settingsBadge.className = 'badge error';
+          setMessage('Connect Shopify for this store before saving support settings.', 'error');
+          return;
+        }
+
         settingsBadge.textContent = 'Saving...';
         settingsBadge.className = 'badge loading';
+        saveSettingsBtn.disabled = true;
 
         const response = await appFetch('/api/merchant-settings', {
           method: 'POST',
@@ -2030,12 +2060,18 @@ function renderMerchantAppWorkspace(initialShop) {
         if (!response.ok) {
           settingsBadge.textContent = 'App settings';
           settingsBadge.className = 'badge error';
+          saveSettingsBtn.disabled = false;
           setMessage(data.error || 'Could not save merchant settings.', 'error');
           return;
         }
-        settingsBadge.textContent = 'App settings';
+        applySavedSettings(data.settings || {});
+        settingsBadge.textContent = 'Saved in Shopify app';
         settingsBadge.className = 'badge ready';
-        setMessage('App settings saved.', 'info');
+        saveSettingsBtn.disabled = false;
+        setMessage('Support settings saved in the Shopify app for this store.', 'info');
+        setTimeout(() => {
+          settingsBadge.textContent = 'App settings';
+        }, 1800);
         loadStatus({ silent: true });
       });
 
