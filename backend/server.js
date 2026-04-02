@@ -71,7 +71,7 @@ A: Sale items are final sale unless they arrive damaged.`,
 
 function getDefaultMerchantSettings() {
   return {
-    assistantName: 'Zypher Support Agent',
+    assistantName: 'Support Agent',
     welcomeMessage: 'Hi there. Ask a question about shipping, returns, exchanges, or your order.',
     placeholderText: 'Type your question...',
     accentColor: '#d8633d',
@@ -261,12 +261,23 @@ function recordUsage({ shop, channel, cached }) {
 function getMerchantSettings(shop) {
   const key = isValidShopDomain(shop) ? shop : 'demo-store';
   const saved = merchantSettings.get(key);
+  const normalizedSaved =
+    saved && typeof saved === 'object'
+      ? {
+          ...saved,
+          assistantName:
+            saved.assistantName === 'StoreReply Support' ||
+            saved.assistantName === 'Zypher Support Agent'
+              ? 'Support Agent'
+              : saved.assistantName,
+        }
+      : saved;
 
   return {
     key,
     settings: {
       ...getDefaultMerchantSettings(),
-      ...(saved && typeof saved === 'object' ? saved : {}),
+      ...(normalizedSaved && typeof normalizedSaved === 'object' ? normalizedSaved : {}),
     },
   };
 }
@@ -3056,6 +3067,13 @@ app.post('/api/merchant-settings', (req, res) => {
         ? incomingSettings.botEnabled
         : result.settings.botEnabled,
   };
+
+  if (
+    nextSettings.assistantName === 'StoreReply Support' ||
+    nextSettings.assistantName === 'Zypher Support Agent'
+  ) {
+    nextSettings.assistantName = 'Support Agent';
+  }
 
   merchantSettings.set(result.key, nextSettings);
   savePersistedState(shopifySessions, merchantSettings, conversationHistory, usageStats);
