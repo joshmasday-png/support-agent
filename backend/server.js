@@ -1380,9 +1380,8 @@ function renderMerchantAppWorkspace(initialShop) {
               <button id="connectBtn" class="secondary" type="button">Connect Shopify</button>
               <button id="syncBtn" class="secondary" type="button">Sync Shopify data</button>
               <button id="refreshBtn" class="secondary" type="button">Refresh status</button>
-              <button id="switchShopBtn" class="secondary" type="button">Switch store</button>
             </div>
-            <div class="helper">Use this area only for store connection and knowledge import. Storefront appearance stays in the Shopify theme editor.</div>
+            <div class="helper">This app is managed per Shopify store. Use this area only for the current store's connection and knowledge import. Storefront appearance stays in the Shopify theme editor.</div>
           </section>
 
           <section class="card">
@@ -1535,7 +1534,6 @@ function renderMerchantAppWorkspace(initialShop) {
       const connectBtn = document.getElementById('connectBtn');
       const syncBtn = document.getElementById('syncBtn');
       const refreshBtn = document.getElementById('refreshBtn');
-      const switchShopBtn = document.getElementById('switchShopBtn');
       const saveSettingsBtn = document.getElementById('saveSettingsBtn');
       const themeHintBtn = document.getElementById('themeHintBtn');
       const themeHint = document.getElementById('themeHint');
@@ -2044,12 +2042,6 @@ function renderMerchantAppWorkspace(initialShop) {
       refreshBtn.addEventListener('click', async () => {
         await loadStatus();
         setMessage('Merchant app status refreshed.', 'info');
-      });
-      switchShopBtn.addEventListener('click', async () => {
-        await appFetch('/api/session/clear', { method: 'POST' });
-        shopDomainInput.value = '';
-        sessionPill.textContent = 'Store session cleared';
-        setMessage('Store session cleared. Enter a different Shopify store domain to connect again.', 'info');
       });
 
       themeHintBtn.addEventListener('click', () => {
