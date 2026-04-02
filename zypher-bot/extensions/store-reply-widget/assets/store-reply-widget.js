@@ -54,7 +54,7 @@
     const accentColor = root.dataset.accentColor;
     const shopDomain = root.dataset.shopDomain || '';
     const backendUrl = normalizeBaseUrl(root.dataset.backendUrl);
-    const subtitleSetting = root.dataset.subtitle || 'AI-first support agent';
+    const subtitleSetting = root.dataset.subtitle || 'Zypher support agent';
     const backendHeaders = {
       'ngrok-skip-browser-warning': 'true',
     };
@@ -128,7 +128,7 @@
 
         const settings = data.settings || {};
         title.textContent = settings.assistantName || root.dataset.launcherLabel || 'Support Agent';
-        subtitle.textContent = subtitleSetting || 'AI-first support agent';
+        subtitle.textContent = subtitleSetting || 'Zypher support agent';
         input.placeholder = settings.placeholderText || 'Ask a question...';
         thread.innerHTML = '';
         appendBubble(
