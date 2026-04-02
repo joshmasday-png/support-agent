@@ -54,7 +54,7 @@
     const accentColor = root.dataset.accentColor;
     const shopDomain = root.dataset.shopDomain || '';
     const backendUrl = normalizeBaseUrl(root.dataset.backendUrl);
-    const subtitleSetting = root.dataset.subtitle || 'Embedded storefront support';
+    const subtitleSetting = root.dataset.subtitle || 'AI-first support agent';
     const backendHeaders = {
       'ngrok-skip-browser-warning': 'true',
     };
@@ -127,8 +127,8 @@
         }
 
         const settings = data.settings || {};
-        title.textContent = settings.assistantName || root.dataset.launcherLabel || 'Support';
-        subtitle.textContent = subtitleSetting || 'Embedded storefront support';
+        title.textContent = settings.assistantName || root.dataset.launcherLabel || 'Support Agent';
+        subtitle.textContent = subtitleSetting || 'AI-first support agent';
         input.placeholder = settings.placeholderText || 'Ask a question...';
         thread.innerHTML = '';
         appendBubble(
@@ -155,7 +155,7 @@
         setInputEnabled(Boolean(data.connected && data.knowledgeSourceCount));
       } catch (error) {
         thread.innerHTML = '';
-        appendBubble('StoreReply could not reach the support backend yet.', 'agent');
+        appendBubble('Support Agent could not reach the support backend yet.', 'agent');
         showStatus(error.message || 'Could not load widget settings.', 'error');
         setInputEnabled(false);
       }

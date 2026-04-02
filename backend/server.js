@@ -71,7 +71,7 @@ A: Sale items are final sale unless they arrive damaged.`,
 
 function getDefaultMerchantSettings() {
   return {
-    assistantName: 'StoreReply Support',
+    assistantName: 'Support Agent',
     welcomeMessage: 'Hi there. Ask a question about shipping, returns, exchanges, or your order.',
     placeholderText: 'Type your question...',
     accentColor: '#d8633d',
@@ -1067,7 +1067,7 @@ function renderMerchantAppPage(initialShop) {
               </div>
               <div class="badge ready">Theme editor</div>
             </div>
-            <div class="note">Open Shopify theme editor → App embeds → StoreReply Chat to change storefront presentation safely.</div>
+            <div class="note">Open Shopify theme editor → App embeds → AI-First Support Agent to change storefront presentation safely.</div>
           </section>
         </div>
       </div>
@@ -1523,7 +1523,7 @@ function renderMerchantAppWorkspace(initialShop) {
             <div class="row">
               <button id="themeHintBtn" class="secondary" type="button">How to edit storefront appearance</button>
             </div>
-            <div id="themeHint" class="note hidden" style="margin-top:12px">Open Shopify theme editor, then App embeds, then StoreReply Chat. Use that area only for widget appearance and placement.</div>
+            <div id="themeHint" class="note hidden" style="margin-top:12px">Open Shopify theme editor, then App embeds, then AI-First Support Agent. Use that area only for widget appearance and placement.</div>
           </section>
         </div>
       </div>

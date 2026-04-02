@@ -209,7 +209,7 @@ function App() {
     trialDays: 7,
   });
   const [merchantSettings, setMerchantSettings] = useState({
-    assistantName: 'StoreReply Support',
+    assistantName: 'Support Agent',
     welcomeMessage: 'Hi there. Ask a question about shipping, returns, exchanges, or your order.',
     placeholderText: 'Type your question...',
     accentColor: '#d8633d',
