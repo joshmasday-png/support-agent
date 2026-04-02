@@ -1549,8 +1549,10 @@ function renderMerchantAppWorkspace(initialShop) {
       const billingBtn = document.getElementById('billingBtn');
       const billingBadge = document.getElementById('billingBadge');
       const sessionPill = document.getElementById('sessionPill');
+      const settingsFieldIds = ['assistantName', 'welcomeMessage', 'placeholderText', 'tone', 'accentColor', 'accentColorText', 'botEnabled'];
       let latestConversations = [];
       let reviewNoteDrafts = {};
+      let settingsDirty = false;
 
       function setSessionPill(message) {
         sessionPill.textContent = message;
@@ -1705,7 +1707,7 @@ function renderMerchantAppWorkspace(initialShop) {
         }).join('');
       }
 
-      function updateDashboard(data) {
+      function updateDashboard(data, options = {}) {
         const shopifyStatus = data.shopifyStatus || {};
         const settings = data.settings || {};
         const usage = data.usage || {};
@@ -1756,17 +1758,19 @@ function renderMerchantAppWorkspace(initialShop) {
         billingBtn.textContent = billingActive ? 'Plan active' : 'Activate paid plan';
         billingBtn.disabled = !shopifyStatus.connected || billingActive;
 
-        document.getElementById('assistantName').value = settings.assistantName || '';
-        document.getElementById('welcomeMessage').value = settings.welcomeMessage || '';
-        document.getElementById('placeholderText').value = settings.placeholderText || '';
-        document.getElementById('tone').value = settings.tone || 'friendly';
-        document.getElementById('accentColor').value = settings.accentColor || '#d8633d';
-        document.getElementById('accentColorText').value = settings.accentColor || '#d8633d';
-        document.getElementById('botEnabled').checked = settings.botEnabled !== false;
-        document.getElementById('botEnabledLabel').textContent = settings.botEnabled === false ? 'Paused' : 'Enabled';
-
         const hasDefaults = Boolean((settings.assistantName || '').trim() && (settings.welcomeMessage || '').trim());
         const botEnabled = settings.botEnabled !== false;
+
+        if (!settingsDirty || options.forceSettings) {
+          document.getElementById('assistantName').value = settings.assistantName || '';
+          document.getElementById('welcomeMessage').value = settings.welcomeMessage || '';
+          document.getElementById('placeholderText').value = settings.placeholderText || '';
+          document.getElementById('tone').value = settings.tone || 'friendly';
+          document.getElementById('accentColor').value = settings.accentColor || '#d8633d';
+          document.getElementById('accentColorText').value = settings.accentColor || '#d8633d';
+          document.getElementById('botEnabled').checked = settings.botEnabled !== false;
+          document.getElementById('botEnabledLabel').textContent = settings.botEnabled === false ? 'Paused' : 'Enabled';
+        }
 
         document.getElementById('opConnectionCopy').textContent = shopifyStatus.connected
           ? 'Connected to ' + (shopDomainInput.value.trim() || 'your Shopify store') + '.'
@@ -1801,6 +1805,7 @@ function renderMerchantAppWorkspace(initialShop) {
       }
 
       function applySavedSettings(settings) {
+        settingsDirty = false;
         document.getElementById('assistantName').value = settings.assistantName || '';
         document.getElementById('welcomeMessage').value = settings.welcomeMessage || '';
         document.getElementById('placeholderText').value = settings.placeholderText || '';
@@ -2082,6 +2087,17 @@ function renderMerchantAppWorkspace(initialShop) {
 
       themeHintBtn.addEventListener('click', () => {
         themeHint.classList.toggle('hidden');
+      });
+      settingsFieldIds.forEach((fieldId) => {
+        const element = document.getElementById(fieldId);
+        const eventName = element && element.type === 'checkbox' ? 'change' : 'input';
+        if (!element) {
+          return;
+        }
+
+        element.addEventListener(eventName, () => {
+          settingsDirty = true;
+        });
       });
       historySearch.addEventListener('input', () => renderHistory(latestConversations));
       historyFilter.addEventListener('change', () => renderHistory(latestConversations));
