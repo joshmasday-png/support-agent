@@ -126,7 +126,7 @@
         }
 
         const settings = data.settings || {};
-        title.textContent = 'Zypher';
+        title.textContent = settings.assistantName || 'Support Agent';
         subtitle.textContent = (root.dataset.subtitle || '').trim() || 'Customer Support';
         input.placeholder = settings.placeholderText || 'Ask a question...';
         thread.innerHTML = '';
