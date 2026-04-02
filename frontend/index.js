@@ -209,7 +209,7 @@ function App() {
     trialDays: 7,
   });
   const [merchantSettings, setMerchantSettings] = useState({
-    assistantName: 'Support Agent',
+    assistantName: 'Zypher Support Agent',
     welcomeMessage: 'Hi there. Ask a question about shipping, returns, exchanges, or your order.',
     placeholderText: 'Type your question...',
     accentColor: '#d8633d',
@@ -863,7 +863,7 @@ function App() {
                 <button type="button" className="widgetLauncher">Open support chat</button>
                 <div className="widget">
                   <div className="widgetHead">
-                    <div className="widgetBrand">StoreReply Support</div>
+                    <div className="widgetBrand">Zypher Support Agent</div>
                     <div className="widgetTag">Embedded widget</div>
                   </div>
                   <div className="thread">

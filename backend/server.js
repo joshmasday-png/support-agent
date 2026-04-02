@@ -71,7 +71,7 @@ A: Sale items are final sale unless they arrive damaged.`,
 
 function getDefaultMerchantSettings() {
   return {
-    assistantName: 'Support Agent',
+    assistantName: 'Zypher Support Agent',
     welcomeMessage: 'Hi there. Ask a question about shipping, returns, exchanges, or your order.',
     placeholderText: 'Type your question...',
     accentColor: '#d8633d',
