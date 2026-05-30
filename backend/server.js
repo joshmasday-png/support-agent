@@ -753,6 +753,30 @@ function getEmbeddedShopFromRequest(req) {
   }
 }
 
+// Resolve the merchant shop for an authenticated *admin* request.
+// Identity must come from a Shopify-verified source only: the embedded session
+// token (App Bridge) or the signed first-party session cookie set after OAuth.
+// A client-supplied ?shop= / req.body.shop value is NEVER trusted for
+// authorization, otherwise any caller could read or modify another store's data.
+function getAuthenticatedShop(req) {
+  return getEmbeddedShopFromRequest(req) || getMerchantSessionShop(req);
+}
+
+// Require an authenticated admin shop. If none is present, respond 401 and
+// return ''. Callers must `if (!shop) return;` immediately after calling this.
+function requireAuthenticatedShop(req, res) {
+  const shop = getAuthenticatedShop(req);
+
+  if (!shop) {
+    res.status(401).json({
+      error: 'Authentication required. Open this app from your Shopify admin.',
+    });
+    return '';
+  }
+
+  return shop;
+}
+
 function setMerchantSessionCookie(res, shop) {
   const cookieValue = createMerchantSessionCookieValue(shop);
 
@@ -1378,21 +1402,22 @@ function renderMerchantAppWorkspace(initialShop) {
             <div class="cardHead">
               <div>
                 <h2>Store connection</h2>
-                <div class="copy">Connect Shopify, sync knowledge, and confirm the support agent is using live store content.</div>
+                <div class="copy">Sync knowledge and confirm the support agent is using live store content.</div>
               </div>
               <div id="connectionBadge" class="badge loading">Checking</div>
             </div>
-            <label class="label" for="shopDomain">
-              <span>Shopify store domain</span>
+            <label class="label" for="connectedStore">
+              <span>Connected store</span>
               <span id="syncMeta" class="meta">Not synced yet</span>
             </label>
-            <input id="shopDomain" class="input" type="text" value="${escapeHtml(shopValue)}" placeholder="example-store.myshopify.com" />
+            <div id="connectedStore" class="input">${escapeHtml(shopValue) || 'Authenticating…'}</div>
+            <input id="shopDomain" type="hidden" value="${escapeHtml(shopValue)}" />
             <div class="row">
-              <button id="connectBtn" class="secondary" type="button">Connect Shopify</button>
+              <button id="connectBtn" class="secondary" type="button" style="display:none">Connect Shopify</button>
               <button id="syncBtn" class="secondary" type="button">Sync Shopify data</button>
               <button id="refreshBtn" class="secondary" type="button">Refresh status</button>
             </div>
-            <div class="helper">This app is managed per Shopify store. Use this area only for the current store's connection and knowledge import. Storefront appearance stays in the Shopify theme editor.</div>
+            <div class="helper">This app is managed per Shopify store. Storefront appearance stays in the Shopify theme editor.</div>
           </section>
 
           <section class="card">
@@ -2185,6 +2210,61 @@ function buildInstallUrl(shop, state) {
   return `https://${shop}/admin/oauth/authorize?${params.toString()}`;
 }
 
+// Begin OAuth for a store that isn't authenticated yet. We can't 302 the iframe
+// to Shopify's authorize page (it can't be framed), so we return a tiny page
+// that performs a top-level redirect, breaking out of the embedded iframe.
+function renderShopifyAuthRedirect(shop) {
+  const state = crypto.randomBytes(16).toString('hex');
+  pendingShopifyStates.set(state, { shop, createdAt: Date.now() });
+
+  const installUrl = buildInstallUrl(shop, state);
+  const installUrlJson = JSON.stringify(installUrl);
+
+  return `<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Connecting to Shopify…</title>
+  </head>
+  <body style="font-family:system-ui,-apple-system,sans-serif;padding:48px;text-align:center;color:#202223">
+    <p>Connecting Zypher to your Shopify store…</p>
+    <script>
+      (function () {
+        var target = ${installUrlJson};
+        try {
+          if (window.top === window.self) {
+            window.location.href = target;
+          } else {
+            window.top.location.href = target;
+          }
+        } catch (error) {
+          window.location.href = target;
+        }
+      })();
+    </script>
+    <noscript><a href="${escapeHtml(installUrl)}">Continue to Shopify to authorize this app</a></noscript>
+  </body>
+</html>`;
+}
+
+// Shown when the app is opened outside Shopify with no store context. We do not
+// render a manual myshopify.com entry field (App Store requirement 2.3.1).
+function renderOpenFromAdminPage() {
+  return `<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Zypher – Support Agent</title>
+  </head>
+  <body style="font-family:system-ui,-apple-system,sans-serif;padding:48px;max-width:560px;margin:0 auto;color:#202223">
+    <h1 style="font-size:1.3rem">Open Zypher from your Shopify admin</h1>
+    <p style="line-height:1.6;color:#5c5f62">To use the Support Agent, open it from <strong>Apps</strong> in your Shopify admin. If you haven't installed it yet, install it from the Shopify App Store.</p>
+  </body>
+</html>`;
+}
+
 function createHmac(params, secret) {
   const sortedEntries = Array.from(params.entries())
     .filter(([key]) => key !== 'hmac' && key !== 'signature')
@@ -2836,10 +2916,29 @@ app.get('/contact', (req, res) => {
 });
 
 app.get('/', (req, res) => {
-  const queryShop = typeof req.query.shop === 'string' ? req.query.shop.trim() : '';
-  const shop = isValidShopDomain(queryShop)
-    ? queryShop
-    : getEmbeddedShopFromRequest(req) || getMerchantSessionShop(req);
+  // Shopify always appends ?shop= (and ?host=) when it loads the app, both on
+  // install and on every embedded open. We use that to decide whether to start
+  // OAuth or render the app — we never ask the merchant to type their domain.
+  const shopParam =
+    typeof req.query.shop === 'string' && isValidShopDomain(req.query.shop.trim())
+      ? req.query.shop.trim()
+      : '';
+  const cookieShop = getMerchantSessionShop(req);
+  const shop = shopParam || cookieShop;
+  const installed = Boolean(shop && shopifySessions.get(shop)?.accessToken);
+
+  // No access token for this store yet: authenticate via OAuth before showing
+  // any UI (App Store requirements 2.3.1 and 2.3.2).
+  if (shopParam && !installed) {
+    return res.send(renderShopifyAuthRedirect(shopParam));
+  }
+
+  // Direct hit with no shop context and no session: don't render a manual
+  // domain-entry form; tell the merchant to open the app from Shopify admin.
+  if (!installed) {
+    return res.send(renderOpenFromAdminPage());
+  }
+
   return res.send(renderMerchantAppWorkspace(shop));
 });
 
@@ -2869,10 +2968,8 @@ app.get('/api/shopify/config', (req, res) => {
 });
 
 app.get('/api/shopify/status', (req, res) => {
-  const queryShop = typeof req.query.shop === 'string' ? req.query.shop.trim() : '';
-  const shop = isValidShopDomain(queryShop)
-    ? queryShop
-    : getEmbeddedShopFromRequest(req) || getMerchantSessionShop(req);
+  const shop = requireAuthenticatedShop(req, res);
+  if (!shop) return;
   res.json(getShopifyStatus(shop));
 });
 
@@ -2892,10 +2989,8 @@ app.post('/api/session/clear', (req, res) => {
 });
 
 app.get('/api/merchant-settings', (req, res) => {
-  const queryShop = typeof req.query.shop === 'string' ? req.query.shop.trim() : '';
-  const shop = isValidShopDomain(queryShop)
-    ? queryShop
-    : getEmbeddedShopFromRequest(req) || getMerchantSessionShop(req);
+  const shop = requireAuthenticatedShop(req, res);
+  if (!shop) return;
   const result = getMerchantSettings(shop);
 
   res.json({
@@ -2917,10 +3012,8 @@ app.get('/api/widget-config', (req, res) => {
 });
 
 app.get('/api/dashboard-bootstrap', (req, res) => {
-  const queryShop = typeof req.query.shop === 'string' ? req.query.shop.trim() : '';
-  const shop = isValidShopDomain(queryShop)
-    ? queryShop
-    : getEmbeddedShopFromRequest(req) || getMerchantSessionShop(req);
+  const shop = requireAuthenticatedShop(req, res);
+  if (!shop) return;
   const usageResult = getUsageStats(shop);
   const conversationResult = getConversationHistory(shop);
   const settingsResult = getMerchantSettings(shop);
@@ -2951,10 +3044,8 @@ app.get('/api/dashboard-bootstrap', (req, res) => {
 });
 
 app.get('/api/conversations', (req, res) => {
-  const queryShop = typeof req.query.shop === 'string' ? req.query.shop.trim() : '';
-  const shop = isValidShopDomain(queryShop)
-    ? queryShop
-    : getEmbeddedShopFromRequest(req) || getMerchantSessionShop(req);
+  const shop = requireAuthenticatedShop(req, res);
+  if (!shop) return;
   const result = getConversationHistory(shop);
 
   res.json({
@@ -2964,7 +3055,8 @@ app.get('/api/conversations', (req, res) => {
 });
 
 app.post('/api/conversations/review', (req, res) => {
-  const shop = typeof req.body.shop === 'string' ? req.body.shop.trim() : '';
+  const shop = requireAuthenticatedShop(req, res);
+  if (!shop) return;
   const conversationId =
     typeof req.body.conversationId === 'string' ? req.body.conversationId.trim() : '';
   const reviewStatus =
@@ -2998,10 +3090,8 @@ app.post('/api/conversations/review', (req, res) => {
 });
 
 app.get('/api/usage-stats', (req, res) => {
-  const queryShop = typeof req.query.shop === 'string' ? req.query.shop.trim() : '';
-  const shop = isValidShopDomain(queryShop)
-    ? queryShop
-    : getEmbeddedShopFromRequest(req) || getMerchantSessionShop(req);
+  const shop = requireAuthenticatedShop(req, res);
+  if (!shop) return;
   const result = getUsageStats(shop);
   const today = new Date().toISOString().slice(0, 10);
 
@@ -3016,10 +3106,8 @@ app.get('/api/usage-stats', (req, res) => {
 });
 
 app.get('/api/billing/status', async (req, res) => {
-  const queryShop = typeof req.query.shop === 'string' ? req.query.shop.trim() : '';
-  const shop = isValidShopDomain(queryShop)
-    ? queryShop
-    : getEmbeddedShopFromRequest(req) || getMerchantSessionShop(req);
+  const shop = requireAuthenticatedShop(req, res);
+  if (!shop) return;
 
   try {
     const billing = await getBillingStatus(shop);
@@ -3035,7 +3123,8 @@ app.get('/api/billing/status', async (req, res) => {
 });
 
 app.post('/api/merchant-settings', (req, res) => {
-  const shop = typeof req.body.shop === 'string' ? req.body.shop.trim() : '';
+  const shop = requireAuthenticatedShop(req, res);
+  if (!shop) return;
   const incomingSettings =
     req.body.settings && typeof req.body.settings === 'object' ? req.body.settings : {};
   const result = getMerchantSettings(shop);
@@ -3156,13 +3245,8 @@ app.get('/auth/shopify/callback', async (req, res) => {
 });
 
 app.post('/api/shopify/sync', async (req, res) => {
-  const shop = typeof req.body.shop === 'string' ? req.body.shop.trim() : '';
-
-  if (!isValidShopDomain(shop)) {
-    return res.status(400).json({
-      error: 'Enter a valid shop domain before syncing Shopify.',
-    });
-  }
+  const shop = requireAuthenticatedShop(req, res);
+  if (!shop) return;
 
   try {
     const session = await syncShopifyKnowledge(shop);
@@ -3183,7 +3267,8 @@ app.post('/api/shopify/sync', async (req, res) => {
 });
 
 app.post('/api/billing/subscribe', async (req, res) => {
-  const shop = typeof req.body.shop === 'string' ? req.body.shop.trim() : '';
+  const shop = requireAuthenticatedShop(req, res);
+  if (!shop) return;
 
   try {
     const result = await createBillingSubscription(shop);
