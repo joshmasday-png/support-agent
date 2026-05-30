@@ -1616,27 +1616,48 @@ function renderMerchantAppWorkspace(initialShop) {
         window.location.assign(url);
       }
 
-      async function appFetch(url, options = {}) {
-        const headers = new Headers(options.headers || {});
+      async function getShopifyIdToken(timeoutMs) {
+        if (!window.shopify || typeof window.shopify.idToken !== 'function') {
+          return '';
+        }
+        try {
+          // Wait for a real session token. A generous safety timeout avoids an
+          // indefinite hang if App Bridge isn't ready, but we no longer give up
+          // after a few hundred ms (that caused intermittent 401s on the
+          // embedded dashboard); a missing token is recovered by the 401 retry.
+          const token = await Promise.race([
+            window.shopify.idToken(),
+            new Promise((resolve) => setTimeout(() => resolve(''), timeoutMs || 4000)),
+          ]);
+          return token || '';
+        } catch (error) {
+          return '';
+        }
+      }
 
-        if (window.shopify && typeof window.shopify.idToken === 'function') {
-          try {
-            const token = await Promise.race([
-              window.shopify.idToken(),
-              new Promise((resolve) => setTimeout(() => resolve(''), 450)),
-            ]);
-            if (token) {
-              headers.set('Authorization', 'Bearer ' + token);
-            }
-          } catch (error) {
-            // Fall back cleanly for non-embedded or local sessions.
+      async function appFetch(url, options = {}) {
+        const baseHeaders = options.headers || {};
+        const headers = new Headers(baseHeaders);
+        const token = await getShopifyIdToken();
+        if (token) {
+          headers.set('Authorization', 'Bearer ' + token);
+        }
+
+        let response = await fetch(url, { ...options, headers });
+
+        // In the embedded app a 401 almost always means the session token was
+        // missing or stale. Fetch a fresh one and retry once so a timing miss
+        // never surfaces as an error to the merchant (or an app reviewer).
+        if (response.status === 401 && window.shopify) {
+          const freshToken = await getShopifyIdToken(6000);
+          if (freshToken) {
+            const retryHeaders = new Headers(baseHeaders);
+            retryHeaders.set('Authorization', 'Bearer ' + freshToken);
+            response = await fetch(url, { ...options, headers: retryHeaders });
           }
         }
 
-        return fetch(url, {
-          ...options,
-          headers,
-        });
+        return response;
       }
 
       function setMessage(message, type) {
