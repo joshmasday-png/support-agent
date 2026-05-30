@@ -632,17 +632,19 @@ function buildMerchantDashboardUrl(shop, connected) {
   return redirectUrl.toString();
 }
 
-function buildHostedMerchantAppUrl(shop, connected) {
-  const appUrl = new URL(shopifyConfig.appUrl.replace(/\/$/, ''));
+// After OAuth, send the merchant back into the Shopify admin so the app loads
+// embedded (App Store requirement 2.3.3) rather than as a standalone page.
+function buildAdminAppUrl(shop) {
+  if (isValidShopDomain(shop) && shopifyConfig.apiKey) {
+    return `https://${shop}/admin/apps/${shopifyConfig.apiKey}`;
+  }
 
+  // Fallback for non-embedded / local dev where we can't build an admin URL.
+  const appUrl = new URL(shopifyConfig.appUrl.replace(/\/$/, ''));
   if (isValidShopDomain(shop)) {
     appUrl.searchParams.set('shop', shop);
-  }
-
-  if (connected) {
     appUrl.searchParams.set('shopify', 'connected');
   }
-
   return appUrl.toString();
 }
 
@@ -3237,7 +3239,7 @@ app.get('/auth/shopify/callback', async (req, res) => {
     savePersistedState(shopifySessions, merchantSettings, conversationHistory, usageStats);
     setMerchantSessionCookie(res, shop);
 
-    return res.redirect(buildHostedMerchantAppUrl(shop, true));
+    return res.redirect(buildAdminAppUrl(shop));
   } catch (error) {
     console.error('Shopify auth failed:', error);
     return res.status(500).send(error.message || 'Shopify auth failed.');
