@@ -2213,7 +2213,28 @@ function renderMerchantAppWorkspace(initialShop) {
         setTimeout(() => loadStatus({ silent: true }), 900);
       }
 
-      loadStatus();
+      async function ensureAuthenticated() {
+        // Embedded: exchange the App Bridge session token for an access token
+        // before loading data. Standalone (no App Bridge) relies on the cookie.
+        if (!window.shopify) {
+          return;
+        }
+        try {
+          const response = await appFetch('/api/auth/bootstrap', { method: 'POST' });
+          const data = await response.json().catch(() => ({}));
+          if (response.ok && data.shop) {
+            shopDomainInput.value = data.shop;
+            const connectedStore = document.getElementById('connectedStore');
+            if (connectedStore) {
+              connectedStore.textContent = data.shop;
+            }
+          }
+        } catch (error) {
+          // loadStatus will surface any hard failure to the merchant.
+        }
+      }
+
+      ensureAuthenticated().then(() => loadStatus());
       setInterval(() => {
         loadStatus({ silent: true });
       }, 10000);
@@ -2401,6 +2422,73 @@ async function exchangeCodeForAccessToken(shop, code) {
   }
 
   return data.access_token;
+}
+
+// Exchange a short-lived App Bridge session token for a stored offline access
+// token. This is Shopify's recommended auth method for apps embedded in the
+// admin and avoids any iframe-busting OAuth redirect (the cause of blank
+// screens). See: shopify.dev token-exchange docs.
+async function exchangeSessionTokenForAccessToken(shop, sessionToken) {
+  const response = await fetch(`https://${shop}/admin/oauth/access_token`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      client_id: shopifyConfig.apiKey,
+      client_secret: shopifyConfig.apiSecret,
+      grant_type: 'urn:ietf:params:oauth:grant-type:token-exchange',
+      subject_token: sessionToken,
+      subject_token_type: 'urn:ietf:params:oauth:token-type:id_token',
+      requested_token_type: 'urn:shopify:params:oauth:token-type:offline-access-token',
+    }),
+  });
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(
+      data.error_description || data.error || 'Failed to exchange Shopify session token.'
+    );
+  }
+
+  return data.access_token;
+}
+
+// Ensure we hold an offline access token for the embedded request's shop,
+// minting one via token exchange when needed. Returns the shop, or '' if the
+// request carries no valid session token.
+async function ensureAccessTokenForRequest(req) {
+  const claims = getSessionTokenClaims(req);
+  const shop = getEmbeddedShopFromRequest(req);
+
+  if (!claims || !isValidShopDomain(shop)) {
+    return '';
+  }
+
+  const existing = shopifySessions.get(shop);
+  if (existing && existing.accessToken) {
+    return shop;
+  }
+
+  const authHeader =
+    typeof req.headers.authorization === 'string' ? req.headers.authorization : '';
+  const sessionToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
+  if (!sessionToken) {
+    return '';
+  }
+
+  const accessToken = await exchangeSessionTokenForAccessToken(shop, sessionToken);
+  shopifySessions.set(shop, {
+    shop,
+    accessToken,
+    installedAt: existing?.installedAt || new Date().toISOString(),
+    syncedAt: existing?.syncedAt || null,
+    knowledgeSources: existing?.knowledgeSources || [],
+  });
+  savePersistedState(shopifySessions, merchantSettings, conversationHistory, usageStats);
+
+  return shop;
 }
 
 async function runShopifyGraphQL(shop, accessToken, query, variables = undefined) {
@@ -2747,6 +2835,21 @@ function buildWidgetConfig(shop) {
 
 app.use(cors());
 
+// Embedded apps must allow framing by the Shopify admin (and the current shop)
+// via Content-Security-Policy, or the browser blanks the iframe. Set it on
+// every response; Shopify provides ?shop= on embedded loads.
+app.use((req, res, next) => {
+  const shopParam =
+    typeof req.query.shop === 'string' && isValidShopDomain(req.query.shop.trim())
+      ? req.query.shop.trim()
+      : '';
+  const frameAncestors = shopParam
+    ? `https://${shopParam} https://admin.shopify.com`
+    : 'https://*.myshopify.com https://admin.shopify.com';
+  res.setHeader('Content-Security-Policy', `frame-ancestors ${frameAncestors};`);
+  next();
+});
+
 const shopifyWebhookParser = express.raw({ type: 'application/json', limit: '2mb' });
 
 app.post('/webhooks/app/uninstalled', shopifyWebhookParser, (req, res) =>
@@ -2939,30 +3042,38 @@ app.get('/contact', (req, res) => {
 });
 
 app.get('/', (req, res) => {
-  // Shopify always appends ?shop= (and ?host=) when it loads the app, both on
-  // install and on every embedded open. We use that to decide whether to start
-  // OAuth or render the app — we never ask the merchant to type their domain.
+  // Shopify appends ?shop= and ?host= (and embedded=1) when it loads the app
+  // inside the admin. We never ask the merchant to type their domain.
   const shopParam =
     typeof req.query.shop === 'string' && isValidShopDomain(req.query.shop.trim())
       ? req.query.shop.trim()
       : '';
+  const hostParam = typeof req.query.host === 'string' ? req.query.host.trim() : '';
+  const isEmbedded = req.query.embedded === '1' || hostParam !== '';
+
+  // Embedded in the Shopify admin: render the app shell. App Bridge loads, the
+  // frontend acquires a session token, and the backend mints an access token
+  // via token exchange (POST /api/auth/bootstrap). No iframe OAuth redirect —
+  // that is what blanks the screen. This is Shopify's recommended embedded auth.
+  if (isEmbedded) {
+    return res.send(renderMerchantAppWorkspace(shopParam));
+  }
+
+  // Standalone (non-embedded) with an existing post-OAuth session.
   const cookieShop = getMerchantSessionShop(req);
   const shop = shopParam || cookieShop;
-  const installed = Boolean(shop && shopifySessions.get(shop)?.accessToken);
+  if (shop && shopifySessions.get(shop)?.accessToken) {
+    return res.send(renderMerchantAppWorkspace(shop));
+  }
 
-  // No access token for this store yet: authenticate via OAuth before showing
-  // any UI (App Store requirements 2.3.1 and 2.3.2).
-  if (shopParam && !installed) {
+  // Standalone first run uses the authorization code grant (top-level, so the
+  // redirect is not blocked); embedded never reaches here.
+  if (shopParam) {
     return res.send(renderShopifyAuthRedirect(shopParam));
   }
 
-  // Direct hit with no shop context and no session: don't render a manual
-  // domain-entry form; tell the merchant to open the app from Shopify admin.
-  if (!installed) {
-    return res.send(renderOpenFromAdminPage());
-  }
-
-  return res.send(renderMerchantAppWorkspace(shop));
+  // No shop context at all: don't show a manual domain field (2.3.1).
+  return res.send(renderOpenFromAdminPage());
 });
 
 app.get('/health', (req, res) => {
@@ -3009,6 +3120,21 @@ app.get('/api/session', (req, res) => {
 app.post('/api/session/clear', (req, res) => {
   clearMerchantSessionCookie(res);
   res.json({ ok: true });
+});
+
+// Called by the embedded frontend on load: verifies the App Bridge session
+// token and, if needed, mints an offline access token via token exchange.
+app.post('/api/auth/bootstrap', async (req, res) => {
+  try {
+    const shop = await ensureAccessTokenForRequest(req);
+    if (!shop) {
+      return res.status(401).json({ error: 'Authentication required.' });
+    }
+    return res.json({ shop, connected: true });
+  } catch (error) {
+    console.error('Token exchange failed:', error);
+    return res.status(500).json({ error: 'Could not authenticate this store with Shopify.' });
+  }
 });
 
 app.get('/api/merchant-settings', (req, res) => {
