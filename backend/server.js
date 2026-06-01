@@ -2188,19 +2188,25 @@ async function exchangeCodeForAccessToken(shop, code) {
 // admin and avoids any iframe-busting OAuth redirect (the cause of blank
 // screens). See: shopify.dev token-exchange docs.
 async function exchangeSessionTokenForAccessToken(shop, sessionToken) {
+  // Request an EXPIRING offline token (expiring=1). Non-expiring (permanent)
+  // offline tokens are deprecated by Shopify and can no longer make API calls.
+  const body = new URLSearchParams({
+    client_id: shopifyConfig.apiKey,
+    client_secret: shopifyConfig.apiSecret,
+    grant_type: 'urn:ietf:params:oauth:grant-type:token-exchange',
+    subject_token: sessionToken,
+    subject_token_type: 'urn:ietf:params:oauth:token-type:id_token',
+    requested_token_type: 'urn:shopify:params:oauth:token-type:offline-access-token',
+    expiring: '1',
+  });
+
   const response = await fetch(`https://${shop}/admin/oauth/access_token`, {
     method: 'POST',
     headers: {
-      'Content-Type': 'application/json',
+      'Content-Type': 'application/x-www-form-urlencoded',
+      Accept: 'application/json',
     },
-    body: JSON.stringify({
-      client_id: shopifyConfig.apiKey,
-      client_secret: shopifyConfig.apiSecret,
-      grant_type: 'urn:ietf:params:oauth:grant-type:token-exchange',
-      subject_token: sessionToken,
-      subject_token_type: 'urn:ietf:params:oauth:token-type:id_token',
-      requested_token_type: 'urn:shopify:params:oauth:token-type:offline-access-token',
-    }),
+    body: body.toString(),
   });
 
   const data = await response.json();
@@ -2211,7 +2217,23 @@ async function exchangeSessionTokenForAccessToken(shop, sessionToken) {
     );
   }
 
-  return data.access_token;
+  return {
+    accessToken: data.access_token,
+    accessTokenExpiresAt:
+      typeof data.expires_in === 'number'
+        ? new Date(Date.now() + data.expires_in * 1000).toISOString()
+        : null,
+    refreshToken: data.refresh_token || '',
+  };
+}
+
+// A stored token is usable only if it exists, has a recorded expiry (legacy
+// permanent tokens have none and are now deprecated), and isn't about to expire.
+function isStoredAccessTokenValid(session) {
+  if (!session || !session.accessToken || !session.accessTokenExpiresAt) {
+    return false;
+  }
+  return new Date(session.accessTokenExpiresAt).getTime() - Date.now() > 60 * 1000;
 }
 
 // Ensure we hold an offline access token for the embedded request's shop,
@@ -2226,7 +2248,7 @@ async function ensureAccessTokenForRequest(req) {
   }
 
   const existing = shopifySessions.get(shop);
-  if (existing && existing.accessToken) {
+  if (isStoredAccessTokenValid(existing)) {
     return shop;
   }
 
@@ -2237,10 +2259,12 @@ async function ensureAccessTokenForRequest(req) {
     return '';
   }
 
-  const accessToken = await exchangeSessionTokenForAccessToken(shop, sessionToken);
+  const token = await exchangeSessionTokenForAccessToken(shop, sessionToken);
   shopifySessions.set(shop, {
     shop,
-    accessToken,
+    accessToken: token.accessToken,
+    accessTokenExpiresAt: token.accessTokenExpiresAt,
+    refreshToken: token.refreshToken,
     installedAt: existing?.installedAt || new Date().toISOString(),
     syncedAt: existing?.syncedAt || null,
     knowledgeSources: existing?.knowledgeSources || [],
