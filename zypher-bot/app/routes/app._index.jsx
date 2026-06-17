@@ -16,7 +16,13 @@ import { TitleBar, useAppBridge } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
 
 export const loader = async ({ request }) => {
-  await authenticate.admin(request);
+  const { billing } = await authenticate.admin(request);
+
+  await billing.require({
+    plans: ["Basic Plan"],
+    isTest: true,
+    onFailure: async () => billing.request({ plan: "Basic Plan", isTest: true }),
+  });
 
   return null;
 };
