@@ -17,12 +17,17 @@ import { authenticate } from "../shopify.server";
 
 export const loader = async ({ request }) => {
   const { billing } = await authenticate.admin(request);
-
-  await billing.require({
+  const billingCheck = await billing.check({
     plans: ["Basic Plan"],
     isTest: true,
-    onFailure: async () => billing.request({ plan: "Basic Plan", isTest: true }),
   });
+
+  if (!billingCheck.hasActivePayment) {
+    await billing.request({
+      plan: "Basic Plan",
+      isTest: true,
+    });
+  }
 
   return null;
 };
