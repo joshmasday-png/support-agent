@@ -18,7 +18,7 @@ const shopify = shopifyApp({
   sessionStorage: new PrismaSessionStorage(prisma),
   billing: {
     "Basic Plan": {
-      amount: 9.99,
+      amount: 19,
       currencyCode: "USD",
       interval: BillingInterval.Every30Days,
     },

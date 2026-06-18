@@ -19,13 +19,13 @@ export const loader = async ({ request }) => {
   const { billing } = await authenticate.admin(request);
   const billingCheck = await billing.check({
     plans: ["Basic Plan"],
-    isTest: true,
+    isTest: false,
   });
 
   if (!billingCheck.hasActivePayment) {
     await billing.request({
       plan: "Basic Plan",
-      isTest: true,
+      isTest: false,
     });
   }
 
