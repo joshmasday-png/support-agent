@@ -16,18 +16,9 @@ import { TitleBar, useAppBridge } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
 
 export const loader = async ({ request }) => {
-  const { billing } = await authenticate.admin(request);
-  const billingCheck = await billing.check({
-    plans: ["Basic Plan"],
-    isTest: false,
-  });
-
-  if (!billingCheck.hasActivePayment) {
-    await billing.request({
-      plan: "Basic Plan",
-      isTest: false,
-    });
-  }
+  // Billing is enforced in the app.jsx layout loader, which gates every
+  // /app/* route, so the home page only needs authentication here.
+  await authenticate.admin(request);
 
   return null;
 };
