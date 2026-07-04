@@ -786,34 +786,32 @@ function setMerchantSessionCookie(res, shop) {
     return;
   }
 
-  const isSecure = shopifyConfig.appUrl.startsWith('https://');
+  // The app loads embedded in an iframe inside the Shopify admin, so the cookie
+  // is sent in a cross-site context. SameSite=None is required for the browser
+  // to attach it there, and SameSite=None is only honored alongside Secure.
   const parts = [
     `storereply_shop=${encodeURIComponent(cookieValue)}`,
     'Path=/',
     'HttpOnly',
-    'SameSite=Lax',
+    'SameSite=None',
+    'Secure',
     'Max-Age=2592000',
   ];
-
-  if (isSecure) {
-    parts.push('Secure');
-  }
 
   res.setHeader('Set-Cookie', parts.join('; '));
 }
 
 function clearMerchantSessionCookie(res) {
+  // Must mirror the attributes used in setMerchantSessionCookie, otherwise the
+  // browser won't match and clear the cookie in the embedded (cross-site) context.
   const parts = [
     'storereply_shop=',
     'Path=/',
     'HttpOnly',
-    'SameSite=Lax',
+    'SameSite=None',
+    'Secure',
     'Max-Age=0',
   ];
-
-  if (shopifyConfig.appUrl.startsWith('https://')) {
-    parts.push('Secure');
-  }
 
   res.setHeader('Set-Cookie', parts.join('; '));
 }
