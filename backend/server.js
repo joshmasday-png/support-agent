@@ -725,6 +725,18 @@ function getSessionTokenClaims(req) {
   const authHeader = typeof req.headers.authorization === 'string' ? req.headers.authorization : '';
   const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
 
+  // TEMPORARY DEBUG: confirm whether a Bearer token reaches the server and,
+  // if so, exactly why jwt.verify rejects it (invalid signature => wrong
+  // SHOPIFY_API_SECRET; jwt audience invalid => wrong SHOPIFY_API_KEY). Remove
+  // once the embedded auth 401 is diagnosed.
+  console.log('[auth-debug] getSessionTokenClaims', {
+    method: req.method,
+    path: req.originalUrl,
+    hasBearerToken: Boolean(token),
+    apiKeySet: Boolean(shopifyConfig.apiKey),
+    apiSecretSet: Boolean(shopifyConfig.apiSecret),
+  });
+
   if (!token || !shopifyConfig.apiSecret || !shopifyConfig.apiKey) {
     return null;
   }
@@ -735,6 +747,11 @@ function getSessionTokenClaims(req) {
       audience: shopifyConfig.apiKey,
     });
   } catch (error) {
+    // TEMPORARY DEBUG: log the exact verification failure.
+    console.log('[auth-debug] jwt.verify failed', {
+      name: error.name,
+      message: error.message,
+    });
     return null;
   }
 }
