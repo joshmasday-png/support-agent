@@ -1,6 +1,8 @@
-{{ 'store-reply-widget.css' | asset_url | stylesheet_tag }}
-<script src="{{ 'store-reply-widget.js' | asset_url }}" defer></script>
-
+{% comment %}
+  CSS and JS are loaded once via the "stylesheet" and "javascript" keys in the
+  schema below. Do not also add manual asset_url tags here, or the script runs
+  twice and every launcher gets duplicate event listeners.
+{% endcomment %}
 {% assign widget_id = 'store-reply-widget-' | append: block.id %}
 
 <div
