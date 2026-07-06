@@ -2,7 +2,7 @@
 
 client_id = "e9cc158adb29827477b4ba284b16562c"
 name = "Zypher - Support Agent"
-application_url = "https://support-agent-production-964c.up.railway.app"
+application_url = "https://storereply-app-production.up.railway.app"
 embedded = true
 
 [build]
@@ -37,5 +37,5 @@ scopes = "read_content,read_legal_policies,read_online_store_pages"
 
 [auth]
 redirect_urls = [
-  "https://support-agent-production-964c.up.railway.app/auth/shopify/callback"
+  "https://storereply-app-production.up.railway.app/auth/shopify/callback"
 ]
