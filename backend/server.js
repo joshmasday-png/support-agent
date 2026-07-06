@@ -12,9 +12,26 @@ const { createPersistence } = require('./db');
 const app = express();
 const port = Number(process.env.PORT) || 3001;
 const model = process.env.OPENAI_MODEL || 'gpt-5.2';
-const client = process.env.OPENAI_API_KEY
-  ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
-  : null;
+
+// A valid API key is a single whitespace-free token. If a deployment env var
+// is misconfigured so another line bleeds into it (e.g. OPENAI_API_KEY set to
+// "sk-... \nSHOPIFY_API_KEY=..."), the embedded newline makes the OpenAI SDK's
+// `Authorization: Bearer <key>` header throw "invalid header value" deep in
+// the request. Reject such values up front with a clear log instead.
+function sanitizeOpenAIApiKey(raw) {
+  const value = typeof raw === 'string' ? raw.trim() : '';
+  if (value && /\s/.test(value)) {
+    console.error(
+      'OPENAI_API_KEY is malformed: it contains whitespace/newlines, which usually ' +
+        'means another env line was pasted into it. Set it to only the key value.'
+    );
+    return '';
+  }
+  return value;
+}
+
+const openaiApiKey = sanitizeOpenAIApiKey(process.env.OPENAI_API_KEY);
+const client = openaiApiKey ? new OpenAI({ apiKey: openaiApiKey }) : null;
 
 const shopifyConfig = {
   apiKey: process.env.SHOPIFY_API_KEY || '',
