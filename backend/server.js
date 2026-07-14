@@ -5,24 +5,24 @@ const fs = require('fs');
 const path = require('path');
 const express = require('express');
 const cors = require('cors');
-const Anthropic = require('@anthropic-ai/sdk');
+const OpenAI = require('openai');
 const jwt = require('jsonwebtoken');
 const { createPersistence } = require('./db');
 
 const app = express();
 const port = Number(process.env.PORT) || 3001;
-const model = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-5';
+const model = process.env.OPENAI_MODEL || 'gpt-5.2';
 
 // A valid API key is a single whitespace-free token. If a deployment env var
-// is misconfigured so another line bleeds into it (e.g. ANTHROPIC_API_KEY set
-// to "sk-ant-... \nSHOPIFY_API_KEY=..."), the embedded newline makes the SDK's
-// `x-api-key` header throw "invalid header value" deep in the request.
+// is misconfigured so another line bleeds into it (e.g. OPENAI_API_KEY set
+// to "sk-... \nSHOPIFY_API_KEY=..."), the embedded newline makes the SDK's
+// `Authorization` header throw "invalid header value" deep in the request.
 // Reject such values up front with a clear log instead.
-function sanitizeAnthropicApiKey(raw) {
+function sanitizeOpenAIApiKey(raw) {
   const value = typeof raw === 'string' ? raw.trim() : '';
   if (value && /\s/.test(value)) {
     console.error(
-      'ANTHROPIC_API_KEY is malformed: it contains whitespace/newlines, which usually ' +
+      'OPENAI_API_KEY is malformed: it contains whitespace/newlines, which usually ' +
         'means another env line was pasted into it. Set it to only the key value.'
     );
     return '';
@@ -30,8 +30,8 @@ function sanitizeAnthropicApiKey(raw) {
   return value;
 }
 
-const anthropicApiKey = sanitizeAnthropicApiKey(process.env.ANTHROPIC_API_KEY);
-const client = anthropicApiKey ? new Anthropic({ apiKey: anthropicApiKey }) : null;
+const openaiApiKey = sanitizeOpenAIApiKey(process.env.OPENAI_API_KEY);
+const client = openaiApiKey ? new OpenAI({ apiKey: openaiApiKey }) : null;
 
 const shopifyConfig = {
   apiKey: process.env.SHOPIFY_API_KEY || '',
@@ -3362,7 +3362,7 @@ app.post('/ask', async (req, res) => {
 
   if (!client) {
     return res.status(500).json({
-      error: 'Missing ANTHROPIC_API_KEY in backend/.env',
+      error: 'Missing OPENAI_API_KEY in backend/.env',
     });
   }
 
@@ -3409,38 +3409,35 @@ app.post('/ask', async (req, res) => {
   }
 
   try {
-    // Anthropic's Messages API takes the system prompt as its own top-level
-    // `system` string (not a message in the `messages` array like OpenAI's
-    // Responses API did), and `messages` only carries the actual
-    // conversation turns. We only ever send one user turn here, so there's
-    // just the one message.
-    const response = await client.messages.create({
+    const response = await client.responses.create({
       model,
-      max_tokens: 1024,
-      system:
-        'You are a customer support agent for an ecommerce merchant. Answer using the merchant knowledge sources only. Write like a real support rep in live chat: plain English, warm, direct, and brief. Default to 1 or 2 short sentences and keep the reply under about 60 words unless the customer clearly asks for more detail. Do not use bullet points, markdown, bold text, headings, or policy-analysis language. Do not explain your reasoning. If the sources do not clearly answer the question, say the store information provided does not specify it and invite the customer to contact support.',
-      messages: [
+      input: [
+        {
+          role: 'system',
+          content: [
+            {
+              type: 'input_text',
+              text: 'You are a customer support agent for an ecommerce merchant. Answer using the merchant knowledge sources only. Write like a real support rep in live chat: plain English, warm, direct, and brief. Default to 1 or 2 short sentences and keep the reply under about 60 words unless the customer clearly asks for more detail. Do not use bullet points, markdown, bold text, headings, or policy-analysis language. Do not explain your reasoning. If the sources do not clearly answer the question, say the store information provided does not specify it and invite the customer to contact support.',
+            },
+          ],
+        },
         {
           role: 'user',
-          content: `Merchant knowledge sources:
+          content: [
+            {
+              type: 'input_text',
+              text: `Merchant knowledge sources:
 
 ${buildKnowledgePrompt(selectedKnowledgeSources)}
 
 Customer question:
 ${userQuestion}`,
+            },
+          ],
         },
       ],
     });
-    // Claude's reply comes back as an array of content blocks (it can mix
-    // text, tool calls, etc.). For a plain text answer like this one, it's a
-    // single block of type 'text' — join defensively in case that ever
-    // changes so we don't silently drop content.
-    const replyText = response.content
-      .filter((block) => block.type === 'text')
-      .map((block) => block.text)
-      .join('\n')
-      .trim();
-    const formattedReply = formatCustomerReply(replyText);
+    const formattedReply = formatCustomerReply(response.output_text);
 
     recordConversation({
       shop: requestedShop,
@@ -3472,15 +3469,11 @@ ${userQuestion}`,
       grounding,
     });
   } catch (error) {
-    console.error('Claude request failed:', error);
+    console.error('OpenAI request failed:', error);
 
-    // The Anthropic SDK throws APIError subclasses with a `status` property
-    // and an `error.error.message` shape (Shopify's/Anthropic's error
-    // envelope), same general idea as the old OpenAI client, so this
-    // fallback chain still works unchanged.
     const statusCode = error.status || 500;
     const errorMessage =
-      error.error?.message || error.message || 'Failed to generate a response from Claude.';
+      error.error?.message || error.message || 'Failed to generate a response from OpenAI.';
 
     return res.status(statusCode).json({
       error: errorMessage,
