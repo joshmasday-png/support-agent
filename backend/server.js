@@ -5,24 +5,24 @@ const fs = require('fs');
 const path = require('path');
 const express = require('express');
 const cors = require('cors');
-const OpenAI = require('openai');
+const Anthropic = require('@anthropic-ai/sdk');
 const jwt = require('jsonwebtoken');
 const { createPersistence } = require('./db');
 
 const app = express();
 const port = Number(process.env.PORT) || 3001;
-const model = process.env.OPENAI_MODEL || 'gpt-5.2';
+const model = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-5';
 
 // A valid API key is a single whitespace-free token. If a deployment env var
-// is misconfigured so another line bleeds into it (e.g. OPENAI_API_KEY set to
-// "sk-... \nSHOPIFY_API_KEY=..."), the embedded newline makes the OpenAI SDK's
-// `Authorization: Bearer <key>` header throw "invalid header value" deep in
-// the request. Reject such values up front with a clear log instead.
-function sanitizeOpenAIApiKey(raw) {
+// is misconfigured so another line bleeds into it (e.g. ANTHROPIC_API_KEY set
+// to "sk-ant-... \nSHOPIFY_API_KEY=..."), the embedded newline makes the SDK's
+// `x-api-key` header throw "invalid header value" deep in the request.
+// Reject such values up front with a clear log instead.
+function sanitizeAnthropicApiKey(raw) {
   const value = typeof raw === 'string' ? raw.trim() : '';
   if (value && /\s/.test(value)) {
     console.error(
-      'OPENAI_API_KEY is malformed: it contains whitespace/newlines, which usually ' +
+      'ANTHROPIC_API_KEY is malformed: it contains whitespace/newlines, which usually ' +
         'means another env line was pasted into it. Set it to only the key value.'
     );
     return '';
@@ -30,8 +30,8 @@ function sanitizeOpenAIApiKey(raw) {
   return value;
 }
 
-const openaiApiKey = sanitizeOpenAIApiKey(process.env.OPENAI_API_KEY);
-const client = openaiApiKey ? new OpenAI({ apiKey: openaiApiKey }) : null;
+const anthropicApiKey = sanitizeAnthropicApiKey(process.env.ANTHROPIC_API_KEY);
+const client = anthropicApiKey ? new Anthropic({ apiKey: anthropicApiKey }) : null;
 
 const shopifyConfig = {
   apiKey: process.env.SHOPIFY_API_KEY || '',
@@ -44,12 +44,16 @@ const shopifyConfig = {
 };
 
 const billingConfig = {
-  planName: process.env.SHOPIFY_BILLING_PLAN_NAME || 'StoreReply Pro',
-  amount: Number(process.env.SHOPIFY_BILLING_AMOUNT || 19),
+  planName: process.env.SHOPIFY_BILLING_PLAN_NAME || 'Zypher Pro',
+  amount: Number(process.env.SHOPIFY_BILLING_AMOUNT || 9.99),
   currencyCode: process.env.SHOPIFY_BILLING_CURRENCY || 'USD',
   interval: process.env.SHOPIFY_BILLING_INTERVAL || 'EVERY_30_DAYS',
   trialDays: Number(process.env.SHOPIFY_BILLING_TRIAL_DAYS || 7),
-  test: String(process.env.SHOPIFY_BILLING_TEST || 'true').toLowerCase() !== 'false',
+  // Defaults to LIVE billing now, not test mode. Test charges are invisible
+  // to Shopify's billing review and were almost certainly part of why past
+  // submissions were rejected. Set SHOPIFY_BILLING_TEST=true on Railway only
+  // while you are manually testing on a development store.
+  test: String(process.env.SHOPIFY_BILLING_TEST || 'false').toLowerCase() === 'true',
 };
 
 const merchantKnowledgeTemplate = {
@@ -813,6 +817,36 @@ function requireAuthenticatedShop(req, res) {
   return shop;
 }
 
+// Backend-side billing gate. The dashboard UI already hides these features
+// behind an overlay when there is no active subscription, but a client-side
+// gate alone can be bypassed by calling the API directly, and a Shopify
+// reviewer testing "does declining the charge actually restrict the app"
+// will do exactly that. This is the enforcement that can't be skipped.
+//
+// Returns the shop string on success (same calling convention as
+// requireAuthenticatedShop) or '' after already sending a 402 response.
+async function requireActiveBilling(shop, res) {
+  try {
+    const { activeSubscription } = await getBillingStatus(shop);
+
+    if (!activeSubscription) {
+      res.status(402).json({
+        error: 'An active Zypher subscription is required to use this feature.',
+        billingRequired: true,
+      });
+      return '';
+    }
+
+    return shop;
+  } catch (error) {
+    console.error('Billing status check failed:', error);
+    res.status(500).json({
+      error: 'Could not verify subscription status. Please try again.',
+    });
+    return '';
+  }
+}
+
 function setMerchantSessionCookie(res, shop) {
   const cookieValue = createMerchantSessionCookieValue(shop);
 
@@ -1097,11 +1131,25 @@ function renderMerchantAppWorkspace(initialShop) {
       .reviewBtn.warn.active{background:#8a5a08;border-color:#8a5a08}
       .noteInput{margin-top:10px;min-height:78px}
       .hidden{display:none}
+      /* Billing gate: dims and disables the dashboard behind it while an overlay
+         with only the "Activate paid plan" action stays interactive on top. */
+      .shell.locked{filter:blur(2px);pointer-events:none;user-select:none}
+      .billingGateOverlay{position:fixed;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;background:rgba(23,50,77,.55);padding:24px}
+      .billingGateCard{max-width:440px;width:100%;background:#fffdf9;border-radius:24px;padding:32px;box-shadow:0 30px 70px rgba(23,50,77,.35);text-align:left}
+      .billingGateCard h2{margin:0 0 12px;font-size:1.5rem;color:var(--ink)}
+      .billingGateCard p{margin:0 0 20px;color:var(--muted);line-height:1.6}
       @media (max-width:1080px){.overview{grid-template-columns:repeat(2,minmax(0,1fr))}.layout,.metrics,.split,.miniGrid{grid-template-columns:1fr}}
       @media (max-width:720px){.overview{grid-template-columns:1fr}.cardHead,.label,.checkItem,.toggleRow{flex-direction:column;align-items:flex-start}.shell{width:min(100% - 24px,1220px)}.toolbar{grid-template-columns:1fr}}
     </style>
   </head>
   <body>
+    <div id="billingGateOverlay" class="billingGateOverlay hidden">
+      <div class="billingGateCard">
+        <h2>Activate your Zypher subscription</h2>
+        <p>A paid subscription is required to use Zypher. Activate the plan to unlock syncing, the support agent, and the storefront widget for this store.</p>
+        <button id="billingGateBtn" class="primary" type="button">Activate paid plan</button>
+      </div>
+    </div>
     <div class="shell">
       <section class="hero">
         <div class="eyebrow">StoreReply Merchant App</div>
@@ -1608,6 +1656,19 @@ function renderMerchantAppWorkspace(initialShop) {
         billingBtn.textContent = billingActive ? 'Plan active' : 'Activate paid plan';
         billingBtn.disabled = !shopifyStatus.connected || billingActive;
 
+        // Block the whole dashboard behind a full-screen overlay until the
+        // store has an active paid subscription. Without this, a merchant
+        // (or a Shopify reviewer) can use every feature without ever paying,
+        // which is exactly the billing gap that has been getting this app
+        // rejected. The overlay only shows once we actually know the store
+        // is connected — otherwise we'd show "please pay" before the
+        // merchant has even connected their store.
+        if (billingGateOverlay) {
+          const shouldGate = shopifyStatus.connected && !billingActive;
+          billingGateOverlay.classList.toggle('hidden', !shouldGate);
+          document.querySelector('.shell').classList.toggle('locked', shouldGate);
+        }
+
         const hasDefaults = Boolean((settings.assistantName || '').trim() && (settings.welcomeMessage || '').trim());
         const botEnabled = settings.botEnabled !== false;
 
@@ -1840,16 +1901,21 @@ function renderMerchantAppWorkspace(initialShop) {
         loadStatus({ silent: true });
       });
 
-      billingBtn.addEventListener('click', async () => {
+      // Shared by both the in-card "Activate paid plan" button and the
+      // full-screen billing gate button below, so there is exactly one place
+      // that kicks off the Shopify subscription flow.
+      async function startBillingFlow(triggerBtn, triggerBadge) {
         const shop = shopDomainInput.value.trim();
         if (!shop) {
           setMessage('Enter a Shopify store domain first.', 'error');
           return;
         }
 
-        billingBtn.disabled = true;
-        billingBadge.textContent = 'Preparing plan';
-        billingBadge.className = 'badge loading';
+        if (triggerBtn) triggerBtn.disabled = true;
+        if (triggerBadge) {
+          triggerBadge.textContent = 'Preparing plan';
+          triggerBadge.className = 'badge loading';
+        }
 
         const response = await appFetch('/api/billing/subscribe', {
           method: 'POST',
@@ -1859,9 +1925,11 @@ function renderMerchantAppWorkspace(initialShop) {
         const data = await response.json();
 
         if (!response.ok) {
-          billingBtn.disabled = false;
-          billingBadge.textContent = 'Billing needed';
-          billingBadge.className = 'badge error';
+          if (triggerBtn) triggerBtn.disabled = false;
+          if (triggerBadge) {
+            triggerBadge.textContent = 'Billing needed';
+            triggerBadge.className = 'badge error';
+          }
           setMessage(data.error || 'Could not start the subscription flow.', 'error');
           return;
         }
@@ -1873,15 +1941,25 @@ function renderMerchantAppWorkspace(initialShop) {
         }
 
         if (!data.confirmationUrl) {
-          billingBtn.disabled = false;
-          billingBadge.textContent = 'Billing needed';
-          billingBadge.className = 'badge error';
+          if (triggerBtn) triggerBtn.disabled = false;
+          if (triggerBadge) {
+            triggerBadge.textContent = 'Billing needed';
+            triggerBadge.className = 'badge error';
+          }
           setMessage('Shopify did not return a subscription confirmation URL.', 'error');
           return;
         }
 
         redirectToTopLevel(data.confirmationUrl);
-      });
+      }
+
+      billingBtn.addEventListener('click', () => startBillingFlow(billingBtn, billingBadge));
+
+      const billingGateOverlay = document.getElementById('billingGateOverlay');
+      const billingGateBtn = document.getElementById('billingGateBtn');
+      if (billingGateBtn) {
+        billingGateBtn.addEventListener('click', () => startBillingFlow(billingGateBtn, null));
+      }
 
       saveSettingsBtn.addEventListener('click', async () => {
         const shop = shopDomainInput.value.trim();
@@ -3086,9 +3164,11 @@ app.get('/api/billing/status', async (req, res) => {
   }
 });
 
-app.post('/api/merchant-settings', (req, res) => {
+app.post('/api/merchant-settings', async (req, res) => {
   const shop = requireAuthenticatedShop(req, res);
   if (!shop) return;
+  const billedShop = await requireActiveBilling(shop, res);
+  if (!billedShop) return;
   const incomingSettings =
     req.body.settings && typeof req.body.settings === 'object' ? req.body.settings : {};
   const result = getMerchantSettings(shop);
@@ -3211,6 +3291,8 @@ app.get('/auth/shopify/callback', async (req, res) => {
 app.post('/api/shopify/sync', async (req, res) => {
   const shop = requireAuthenticatedShop(req, res);
   if (!shop) return;
+  const billedShop = await requireActiveBilling(shop, res);
+  if (!billedShop) return;
 
   try {
     const session = await syncShopifyKnowledge(shop);
@@ -3268,9 +3350,19 @@ app.post('/ask', async (req, res) => {
 
   console.log('User asked:', userQuestion);
 
+  // Billing gate: if this request is tied to a real Shopify store, that store
+  // must have an active paid subscription before we spend an AI call on it.
+  // This is the core paid feature, so it's the most important place to
+  // enforce billing server-side — this is what a Shopify reviewer will test
+  // by declining the charge and then checking whether the app still works.
+  if (isValidShopDomain(requestedShop)) {
+    const billedShop = await requireActiveBilling(requestedShop, res);
+    if (!billedShop) return;
+  }
+
   if (!client) {
     return res.status(500).json({
-      error: 'Missing OPENAI_API_KEY in backend/.env',
+      error: 'Missing ANTHROPIC_API_KEY in backend/.env',
     });
   }
 
@@ -3317,36 +3409,38 @@ app.post('/ask', async (req, res) => {
   }
 
   try {
-    const response = await client.responses.create({
+    // Anthropic's Messages API takes the system prompt as its own top-level
+    // `system` string (not a message in the `messages` array like OpenAI's
+    // Responses API did), and `messages` only carries the actual
+    // conversation turns. We only ever send one user turn here, so there's
+    // just the one message.
+    const response = await client.messages.create({
       model,
-      input: [
-        {
-          role: 'system',
-          content: [
-            {
-              type: 'input_text',
-              text:
-                'You are a customer support agent for an ecommerce merchant. Answer using the merchant knowledge sources only. Write like a real support rep in live chat: plain English, warm, direct, and brief. Default to 1 or 2 short sentences and keep the reply under about 60 words unless the customer clearly asks for more detail. Do not use bullet points, markdown, bold text, headings, or policy-analysis language. Do not explain your reasoning. If the sources do not clearly answer the question, say the store information provided does not specify it and invite the customer to contact support.',
-            },
-          ],
-        },
+      max_tokens: 1024,
+      system:
+        'You are a customer support agent for an ecommerce merchant. Answer using the merchant knowledge sources only. Write like a real support rep in live chat: plain English, warm, direct, and brief. Default to 1 or 2 short sentences and keep the reply under about 60 words unless the customer clearly asks for more detail. Do not use bullet points, markdown, bold text, headings, or policy-analysis language. Do not explain your reasoning. If the sources do not clearly answer the question, say the store information provided does not specify it and invite the customer to contact support.',
+      messages: [
         {
           role: 'user',
-          content: [
-            {
-              type: 'input_text',
-              text: `Merchant knowledge sources:
+          content: `Merchant knowledge sources:
 
 ${buildKnowledgePrompt(selectedKnowledgeSources)}
 
 Customer question:
 ${userQuestion}`,
-            },
-          ],
         },
       ],
     });
-    const formattedReply = formatCustomerReply(response.output_text);
+    // Claude's reply comes back as an array of content blocks (it can mix
+    // text, tool calls, etc.). For a plain text answer like this one, it's a
+    // single block of type 'text' — join defensively in case that ever
+    // changes so we don't silently drop content.
+    const replyText = response.content
+      .filter((block) => block.type === 'text')
+      .map((block) => block.text)
+      .join('\n')
+      .trim();
+    const formattedReply = formatCustomerReply(replyText);
 
     recordConversation({
       shop: requestedShop,
@@ -3378,11 +3472,15 @@ ${userQuestion}`,
       grounding,
     });
   } catch (error) {
-    console.error('OpenAI request failed:', error);
+    console.error('Claude request failed:', error);
 
+    // The Anthropic SDK throws APIError subclasses with a `status` property
+    // and an `error.error.message` shape (Shopify's/Anthropic's error
+    // envelope), same general idea as the old OpenAI client, so this
+    // fallback chain still works unchanged.
     const statusCode = error.status || 500;
     const errorMessage =
-      error.error?.message || error.message || 'Failed to generate a response from OpenAI.';
+      error.error?.message || error.message || 'Failed to generate a response from Claude.';
 
     return res.status(statusCode).json({
       error: errorMessage,
