@@ -56,6 +56,24 @@ const billingConfig = {
   test: String(process.env.SHOPIFY_BILLING_TEST || 'false').toLowerCase() === 'true',
 };
 
+// Theme editor deep link that opens the theme app extension with our app embed
+// pre-selected, so the merchant only has to toggle it on and save. The id is
+// "<extension uuid>/<block handle>" and must match extensions/store-reply-widget
+// (blocks/app-embed.liquid). Override per environment if the uuid differs.
+const widgetAppEmbedId =
+  process.env.SHOPIFY_WIDGET_APP_EMBED_ID || 'e9cc158adb29827477b4ba284b16562c/app-embed';
+
+function buildWidgetActivationUrl(shop) {
+  if (!isValidShopDomain(shop)) {
+    return '';
+  }
+
+  return (
+    `https://${shop}/admin/themes/current/editor` +
+    `?context=apps&template=index&activateAppId=${widgetAppEmbedId}`
+  );
+}
+
 const merchantKnowledgeTemplate = {
   sourceTemplates: [
     {
@@ -1063,6 +1081,9 @@ function renderPublicInfoPage({ title, eyebrow, intro, sections }) {
 
 function renderMerchantAppWorkspace(initialShop) {
   const shopValue = isValidShopDomain(initialShop) ? initialShop : '';
+  // Empty on an embedded first load (no ?shop=); the client fills the link in
+  // once /api/auth/bootstrap resolves the shop.
+  const widgetActivationUrl = buildWidgetActivationUrl(shopValue);
   const appBridgeMeta = shopifyConfig.apiKey
     ? `<meta name="shopify-api-key" content="${escapeHtml(shopifyConfig.apiKey)}" />
     <script src="https://cdn.shopify.com/shopifycloud/app-bridge.js"></script>`
@@ -1073,7 +1094,7 @@ function renderMerchantAppWorkspace(initialShop) {
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>StoreReply Merchant App</title>
+    <title>Zypher Merchant App</title>
     ${appBridgeMeta}
     <style>
       :root{--card:#fffdf9;--ink:#17324d;--muted:#5d748d;--line:#d6e1ec;--accent:#d8633d;--ok:#e8f7ef;--okText:#176541;--warn:#fff4df;--warnText:#8a5a08;--err:#fff0ec;--errText:#932f16}
@@ -1107,6 +1128,7 @@ function renderMerchantAppWorkspace(initialShop) {
       .input,.area,.select{width:100%;border:1px solid var(--line);border-radius:16px;background:var(--card);color:var(--ink)}
       .input,.select{padding:14px 15px}.area{min-height:120px;padding:16px 17px;line-height:1.65}
       .row{display:flex;flex-wrap:wrap;gap:10px;margin-top:16px}.primary,.secondary{border-radius:999px}.primary{border:none;background:var(--accent);color:#fff;padding:13px 18px;font-weight:800}.secondary{border:1px solid var(--line);background:#fff;padding:12px 16px;font-weight:700;color:var(--ink)}
+      a.primary,a.secondary{text-decoration:none;display:inline-flex;align-items:center;justify-content:center}
       .msg{margin-top:16px;padding:13px 15px;border-radius:16px;line-height:1.55}.msg.info{background:#edf6ff;color:#1e4e76}.msg.error{background:var(--err);color:var(--errText)}
       .note,.helper{color:var(--muted);font-size:.92rem;line-height:1.55}.helper{margin-top:10px}
       .checklist{display:grid;gap:10px;margin-top:16px}
@@ -1152,7 +1174,7 @@ function renderMerchantAppWorkspace(initialShop) {
     </div>
     <div class="shell">
       <section class="hero">
-        <div class="eyebrow">StoreReply Merchant App</div>
+        <div class="eyebrow">Zypher Merchant App</div>
         <h1>Run the support agent inside Shopify without mixing up which settings live where.</h1>
         <p>Use this page for support behavior, knowledge, merchant defaults, usage, and customer history. Use the Shopify theme editor only for widget appearance and placement.</p>
         <div class="heroMeta">
@@ -1254,10 +1276,12 @@ function renderMerchantAppWorkspace(initialShop) {
             <div id="connectedStore" class="input">${escapeHtml(shopValue) || 'Authenticating…'}</div>
             <input id="shopDomain" type="hidden" value="${escapeHtml(shopValue)}" />
             <div class="row">
+              <a id="widgetActivationLink" class="primary${widgetActivationUrl ? '' : ' hidden'}" href="${escapeHtml(widgetActivationUrl)}" target="_blank" rel="noopener noreferrer">Enable the storefront widget</a>
               <button id="connectBtn" class="secondary" type="button" style="display:none">Connect Shopify</button>
               <button id="syncBtn" class="secondary" type="button">Sync Shopify data</button>
               <button id="refreshBtn" class="secondary" type="button">Refresh status</button>
             </div>
+            <div class="helper">The widget only appears on your storefront after you turn on the Zypher app embed. <strong>Enable the storefront widget</strong> opens your theme editor in a new tab with the embed pre-selected — switch it on and click Save.</div>
             <div class="helper">This app is managed per Shopify store. Storefront appearance stays in the Shopify theme editor.</div>
           </section>
 
@@ -1320,7 +1344,7 @@ function renderMerchantAppWorkspace(initialShop) {
             <div class="miniGrid">
               <div class="miniCard">
                 <div class="miniLabel">Current plan</div>
-                <div id="billingPlanName" class="billingValue">StoreReply Pro</div>
+                <div id="billingPlanName" class="billingValue">Zypher Pro</div>
                 <div id="billingPrice" class="billingNote">$19.00 every 30 days</div>
               </div>
               <div class="miniCard">
@@ -1505,6 +1529,29 @@ function renderMerchantAppWorkspace(initialShop) {
         statusMessage.classList.remove('hidden');
       }
 
+      const widgetAppEmbedId = ${JSON.stringify(widgetAppEmbedId)};
+
+      // The shop is often unknown at render time (embedded loads arrive without
+      // ?shop=), so point the theme-editor deep link at the real store as soon
+      // as the session token resolves it, and keep it hidden until then.
+      function updateWidgetActivationLink(shop) {
+        const link = document.getElementById('widgetActivationLink');
+        if (!link) {
+          return;
+        }
+
+        const trimmed = (shop || '').trim();
+        if (!trimmed) {
+          link.classList.add('hidden');
+          return;
+        }
+
+        link.href =
+          'https://' + trimmed + '/admin/themes/current/editor' +
+          '?context=apps&template=index&activateAppId=' + widgetAppEmbedId;
+        link.classList.remove('hidden');
+      }
+
       function escapeBrowserHtml(value) {
         return String(value || '')
           .replace(/&/g, '&amp;')
@@ -1643,7 +1690,7 @@ function renderMerchantAppWorkspace(initialShop) {
         const currentPeriodEnd = billingSummary.currentPeriodEnd
           ? new Date(billingSummary.currentPeriodEnd).toLocaleDateString()
           : '';
-        document.getElementById('billingPlanName').textContent = billingSummary.planName || 'StoreReply Pro';
+        document.getElementById('billingPlanName').textContent = billingSummary.planName || 'Zypher Pro';
         document.getElementById('billingPrice').textContent =
           (billingSummary.recurringPriceLabel || '$19.00') + ' ' +
           String(billingSummary.interval || 'EVERY_30_DAYS').toLowerCase().replaceAll('_', ' ');
@@ -1841,6 +1888,8 @@ function renderMerchantAppWorkspace(initialShop) {
           return;
         }
 
+        updateWidgetActivationLink(shop);
+
         const response = await appFetch('/api/dashboard-bootstrap?shop=' + encodeURIComponent(shop));
         const data = await response.json();
         if (!response.ok) {
@@ -1935,7 +1984,7 @@ function renderMerchantAppWorkspace(initialShop) {
         }
 
         if (data.alreadyActive) {
-          setMessage('This store already has an active StoreReply plan.', 'info');
+          setMessage('This store already has an active Zypher plan.', 'info');
           loadStatus({ silent: true });
           return;
         }
@@ -2093,6 +2142,7 @@ function renderMerchantAppWorkspace(initialShop) {
           const data = await response.json().catch(() => ({}));
           if (response.ok && data.shop) {
             shopDomainInput.value = data.shop;
+            updateWidgetActivationLink(data.shop);
             const connectedStore = document.getElementById('connectedStore');
             if (connectedStore) {
               connectedStore.textContent = data.shop;
@@ -2740,6 +2790,11 @@ app.use((req, res, next) => {
     ? `https://${shopParam} https://admin.shopify.com`
     : 'https://*.myshopify.com https://admin.shopify.com';
   res.setHeader('Content-Security-Policy', `frame-ancestors ${frameAncestors};`);
+  // A stray X-Frame-Options header blocks the iframe even when frame-ancestors
+  // is correct, and browsers have no "CSP wins" tie-break for DENY/SAMEORIGIN.
+  // Nothing here sets it today, so this is belt-and-braces against a proxy or
+  // middleware adding one later.
+  res.removeHeader('X-Frame-Options');
   next();
 });
 
