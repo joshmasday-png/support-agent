@@ -3388,7 +3388,9 @@ app.post('/ask', async (req, res) => {
     knowledgeSources: selectedKnowledgeSources,
   });
 
-  console.log('User asked:', userQuestion);
+  // Log the size only. The question is shopper-submitted content and must not
+  // land in plaintext application logs.
+  console.log('User asked a question:', userQuestion.length, 'characters');
 
   // Billing gate: if this request is tied to a real Shopify store, that store
   // must have an active paid subscription before we spend an AI call on it.
